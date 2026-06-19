@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}YURA — Repositories{% endblock %}
+{% block content %}
+<div class="kicker">Analysis Workbench</div>
+<h1>Rank the developers.<br>Ground every claim in the commit history.</h1>
+<p class="dek">Point YURA at any git repository. It clones the full history,
+reads every committer's footprint, and builds a board-ready report that ranks
+the team across volume, consistency, and code quality.</p>
+
+<div class="card card--accent">
+  <h3>Add a repository</h3>
+  <form action="/repos/branches" method="post">
+    <div class="field">
+      <label for="url">Git URL</label>
+      <input type="text" id="url" name="url" required
+             placeholder="https://github.com/owner/repo.git  ·  git@github.com:owner/repo.git">
+      <div class="hint">HTTPS or SSH. Branches are read remotely before cloning.</div>
+    </div>
+    <button class="btn" type="submit">Fetch branches →</button>
+  </form>
+</div>
+
+<hr class="rule">
+
+<h2>Repositories</h2>
+{% if repos %}
+  {% for repo in repos %}
+  <div class="card">
+    <div class="repo-row">
+      <div>
+        <a href="/repos/{{ repo.id }}"><strong>{{ repo.name }}</strong></a>
+        <span class="badge badge--{{ repo.clone_status }}">{{ repo.clone_status }}</span>
+        <div class="repo-row__meta">
+          <span class="mono">{{ repo.url }}</span> · branch
+          <strong>{{ repo.branch }}</strong>
+          {% if repo.runs %} · {{ repo.runs|length }} run(s){% endif %}
+        </div>
+      </div>
+      <a class="btn btn--ghost btn--sm" href="/repos/{{ repo.id }}">Open</a>
+    </div>
+  </div>
+  {% endfor %}
+{% else %}
+  <div class="empty">No repositories yet. Add one above to get started.</div>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}Select branch — YURA{% endblock %}
+{% block content %}
+<div class="kicker">Step 2 · Select Branch</div>
+<h1>{{ name }}</h1>
+<p class="dek"><span class="mono">{{ url }}</span></p>
+
+{% if error %}
+  <div class="errbox">{{ error }}</div>
+  <a class="btn btn--ghost" href="/">← Back</a>
+{% else %}
+<form action="/repos" method="post">
+  <input type="hidden" name="url" value="{{ url }}">
+  <input type="hidden" name="name" value="{{ name }}">
+  <label>Branches ({{ branches|length }})</label>
+  <div class="branch-grid">
+    {% for b in branches %}
+    <div class="branch-opt">
+      <input type="radio" id="b{{ loop.index }}" name="branch" value="{{ b }}"
+             {% if loop.first %}checked{% endif %}>
+      <label for="b{{ loop.index }}">{{ b }}</label>
+    </div>
+    {% endfor %}
+  </div>
+  <button class="btn" type="submit">Clone &amp; index full history →</button>
+  <a class="btn btn--ghost" href="/">Cancel</a>
+</form>
+{% endif %}
+{% endblock %}

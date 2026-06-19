@@ -1,0 +1,120 @@
+{% extends "base.html" %}
+{% block title %}Settings — YURA{% endblock %}
+{% block content %}
+<div class="kicker">Configuration</div>
+<h1>Settings</h1>
+<p class="dek">API keys are stored locally in YURA's SQLite database and used only
+to call the LLM provider during analysis. Leave a key field blank to keep the
+existing value.</p>
+
+{% if request.query_params.get("saved") %}
+  <div class="flash">Settings saved.</div>
+{% endif %}
+
+<form action="/settings" method="post" class="lead">
+  <div class="field">
+    <label for="llm_provider">LLM provider</label>
+    <select id="llm_provider" name="llm_provider">
+      <option value="anthropic" {% if values.llm_provider == "anthropic" %}selected{% endif %}>Anthropic (Claude)</option>
+      <option value="openai" {% if values.llm_provider == "openai" %}selected{% endif %}>OpenAI (GPT)</option>
+    </select>
+    <div class="hint">Used for commit-quality and AI-usage judging in LLM mode.</div>
+  </div>
+
+  <hr class="rule">
+  <h3>Anthropic</h3>
+  <div class="field">
+    <label for="anthropic_api_key">Anthropic API key</label>
+    <input type="password" id="anthropic_api_key" name="anthropic_api_key"
+           placeholder="{% if masked.anthropic_api_key %}{{ masked.anthropic_api_key }}{% else %}sk-ant-…{% endif %}">
+  </div>
+  <div class="field">
+    <label for="anthropic_model">Anthropic model</label>
+    <div class="model-row">
+      <select id="anthropic_model" name="anthropic_model" data-provider="anthropic">
+        {% for m in anthropic_models %}
+        <option value="{{ m }}" {% if m == values.anthropic_model %}selected{% endif %}>{{ m }}</option>
+        {% endfor %}
+      </select>
+      <button type="button" class="btn btn--ghost btn--sm" data-fetch="anthropic">↻ Fetch latest</button>
+    </div>
+    <div class="hint" id="anthropic-source">
+      {% if anthropic_source == "live" %}Live from Anthropic API.
+      {% elif anthropic_source == "cache" %}Cached from Anthropic API.
+      {% else %}Built-in list — add an API key, then “Fetch latest” for the live catalog.{% endif %}
+    </div>
+  </div>
+
+  <hr class="rule">
+  <h3>OpenAI</h3>
+  <div class="field">
+    <label for="openai_api_key">OpenAI API key</label>
+    <input type="password" id="openai_api_key" name="openai_api_key"
+           placeholder="{% if masked.openai_api_key %}{{ masked.openai_api_key }}{% else %}sk-…{% endif %}">
+  </div>
+  <div class="field">
+    <label for="openai_model">OpenAI model</label>
+    <div class="model-row">
+      <select id="openai_model" name="openai_model" data-provider="openai">
+        {% for m in openai_models %}
+        <option value="{{ m }}" {% if m == values.openai_model %}selected{% endif %}>{{ m }}</option>
+        {% endfor %}
+      </select>
+      <button type="button" class="btn btn--ghost btn--sm" data-fetch="openai">↻ Fetch latest</button>
+    </div>
+    <div class="hint" id="openai-source">
+      {% if openai_source == "live" %}Live from OpenAI API.
+      {% elif openai_source == "cache" %}Cached from OpenAI API.
+      {% else %}Built-in list — add an API key, then “Fetch latest” for the live catalog.{% endif %}
+    </div>
+  </div>
+
+  <hr class="rule">
+  <h3>Cost guard</h3>
+  <div class="field">
+    <label for="max_commits_per_run">Max commits judged per run</label>
+    <input type="number" id="max_commits_per_run" name="max_commits_per_run"
+           value="{{ values.max_commits_per_run }}" min="1" max="100000">
+    <div class="hint">Caps how many commits are sent to the LLM in a single analysis (cost ceiling).</div>
+  </div>
+
+  <button class="btn" type="submit">Save settings</button>
+</form>
+
+<script>
+document.querySelectorAll("[data-fetch]").forEach(function (btn) {
+  btn.addEventListener("click", async function () {
+    var provider = btn.getAttribute("data-fetch");
+    var select = document.querySelector('select[data-provider="' + provider + '"]');
+    var srcEl = document.getElementById(provider + "-source");
+    var original = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = "Fetching…";
+    try {
+      var resp = await fetch("/settings/models?provider=" + provider);
+      var data = await resp.json();
+      var keep = select.value;
+      select.innerHTML = "";
+      data.models.forEach(function (m) {
+        var opt = document.createElement("option");
+        opt.value = m;
+        opt.textContent = m;
+        if (m === keep) opt.selected = true;
+        select.appendChild(opt);
+      });
+      srcEl.textContent =
+        data.source === "live"
+          ? "Live from provider API (" + data.models.length + " models)."
+          : data.source === "cache"
+          ? "Cached from provider API."
+          : "Built-in list — add a valid API key to fetch the live catalog.";
+    } catch (e) {
+      srcEl.textContent = "Fetch failed — check the API key and network.";
+    } finally {
+      btn.disabled = false;
+      btn.textContent = original;
+    }
+  });
+});
+</script>
+{% endblock %}

@@ -1,0 +1,171 @@
+{% extends "base.html" %}
+{% block title %}{{ repo.name }} — YURA{% endblock %}
+{% block head %}
+  {% if repo.clone_status == "cloning" %}<meta http-equiv="refresh" content="4">{% endif %}
+{% endblock %}
+{% block content %}
+<div class="kicker">Repository</div>
+<h1>{{ repo.name }}</h1>
+<p class="dek"><span class="mono">{{ repo.url }}</span> · branch <strong>{{ repo.branch }}</strong></p>
+
+<div class="card">
+  <div class="repo-row">
+    <div>
+      <h3 style="margin:0">Status
+        <span class="badge badge--{{ repo.clone_status }}">{{ repo.clone_status }}</span>
+      </h3>
+      {% if repo.clone_status == "cloning" %}
+        <div class="repo-row__meta">Cloning full history… this page refreshes automatically.</div>
+      {% elif repo.clone_status == "error" %}
+        <div class="errbox">{{ repo.clone_message }}</div>
+      {% elif repo.clone_status == "ready" %}
+        <div class="repo-row__meta">Full history cloned. Ready to analyze.</div>
+      {% endif %}
+    </div>
+    <div style="display:flex; gap:10px; align-items:center">
+      {% if repo.clone_status == "ready" %}
+      <form action="/repos/{{ repo.id }}/analyze?mode=llm" method="post" id="form-llm">
+        <button class="btn" type="submit">Run analysis →</button>
+      </form>
+      {% endif %}
+      <form action="/repos/{{ repo.id }}/delete" method="post"
+            onsubmit="return confirm('Delete this repository and its clone?')">
+        <button class="btn btn--danger btn--sm" type="submit">Delete</button>
+      </form>
+    </div>
+  </div>
+
+  {% if repo.clone_status == "ready" %}
+  <div class="runline">
+    <div class="runcfg">
+      <div class="runcfg__item">
+        <span class="runcfg__lbl">Total commits</span>
+        <span class="runcfg__val" id="rc-total">—</span>
+      </div>
+      <div class="runcfg__arrow">→</div>
+      <div class="runcfg__item">
+        <span class="runcfg__lbl">Scan limit</span>
+        <input type="number" id="rc-cap" class="runcfg__cap" min="1" max="5000"
+               step="50" value="{{ cap }}">
+      </div>
+      <div class="runcfg__arrow">=</div>
+      <div class="runcfg__item">
+        <span class="runcfg__lbl">Commits judged</span>
+        <span class="runcfg__val" id="rc-judge">—</span>
+      </div>
+    </div>
+    <p class="runline__cost" id="est-line">Estimating cost…</p>
+    <form action="/repos/{{ repo.id }}/analyze?mode=local" method="post" class="runline__alt">
+      <button class="btn-link" type="submit">or run free git-stats only (no LLM)</button>
+    </form>
+  </div>
+  {% endif %}
+</div>
+
+{% if repo.clone_status == "ready" %}
+<script>
+(function () {
+  var line = document.getElementById("est-line");
+  if (!line) return;
+  var capInput = document.getElementById("rc-cap");
+  var totalEl = document.getElementById("rc-total");
+  var judgeEl = document.getElementById("rc-judge");
+  var formLLM = document.getElementById("form-llm");
+  var base = "/repos/{{ repo.id }}/analyze";
+  var timer = null;
+
+  function money(v) { return "$" + v.toFixed(2); }
+  function tok(n) { return n >= 1000 ? (n/1000).toFixed(1) + "k" : "" + n; }
+  function clampCap() {
+    var v = parseInt(capInput.value, 10);
+    if (isNaN(v) || v < 1) v = 1;
+    if (v > 5000) v = 5000;
+    return v;
+  }
+
+  function syncForm(cap) { formLLM.action = base + "?mode=llm&cap=" + cap; }
+
+  async function estimate() {
+    var cap = clampCap();
+    syncForm(cap);
+    line.textContent = "Estimating cost…";
+    try {
+      var d = await (await fetch(base.replace("/analyze","") + "/estimate?cap=" + cap)).json();
+      if (d.error) { line.textContent = d.error; return; }
+      totalEl.textContent = d.total_commits.toLocaleString();
+      judgeEl.textContent = d.judged.toLocaleString();
+      var detail = "Judging <strong>" + d.judged.toLocaleString() + "</strong> commit" +
+        (d.judged === 1 ? "" : "s") +
+        (d.sampled ? " (sampled across contributors from " + d.total_commits.toLocaleString() + ")"
+                   : " — the full history") +
+        " with <strong>" + d.provider + " / " + d.model + "</strong>.";
+      var cost = "Estimated <strong class='big'>≈ " + money(d.cost) + "</strong>" +
+        "<span class='range'> · range " + money(d.cost_low) + "–" + money(d.cost_high) +
+        " · " + tok(d.est_input_tokens + d.est_output_tokens) + " tokens</span>";
+      var notes = [];
+      if (!d.price_known) notes.push("Fallback pricing for this model — actual cost may differ.");
+      if (!d.has_key) notes.push("No " + d.provider + " API key set — add one in Settings first.");
+      var html = "<span class='est-detail'>" + detail + "</span>" +
+                 "<span class='est-cost'>" + cost + "</span>";
+      if (notes.length) html += "<span class='est-note'>" + notes.join(" ") + "</span>";
+      line.innerHTML = html;
+    } catch (e) { line.textContent = "Cost estimate unavailable."; }
+  }
+
+  capInput.addEventListener("input", function () {
+    clearTimeout(timer);
+    timer = setTimeout(estimate, 450);
+  });
+  capInput.addEventListener("change", function () {
+    capInput.value = clampCap();  // snap to bounds on commit
+  });
+  estimate();
+})();
+</script>
+{% endif %}
+
+<div class="runs-bar">
+  <h3>Analysis runs <span class="runs-count">{{ runs|length }}</span></h3>
+  {% if runs %}
+  <form method="post" action="/repos/{{ repo.id }}/runs/clear"
+        onsubmit="return confirm('Delete all {{ runs|length }} run(s) for this repository?')">
+    <button class="btn-link" type="submit">Clear all</button>
+  </form>
+  {% endif %}
+</div>
+
+{% if runs %}
+<table class="runs">
+  <thead>
+    <tr>
+      <th class="c-id">Run</th>
+      <th class="c-mode">Mode</th>
+      <th class="c-status">Status</th>
+      <th class="c-when">When</th>
+      <th class="c-msg">Summary</th>
+      <th class="c-act"></th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for run in runs %}
+    <tr class="run" onclick="location.href='/runs/{{ run.id }}'">
+      <td class="mono">#{{ run.id }}</td>
+      <td><span class="tag tag--{{ run.mode }}">{{ 'LLM' if run.mode == 'llm' else 'GIT' }}</span></td>
+      <td><span class="dot dot--{{ run.status if run.status != 'done' else 'ready' }}"></span>{{ run.status }}</td>
+      <td class="mono nowrap">{{ run.created_at.isoformat()|humandt }}</td>
+      <td class="run__msg">{{ run.message or '—' }}</td>
+      <td class="run__act">
+        <form method="post" action="/runs/{{ run.id }}/delete"
+              onclick="event.stopPropagation()"
+              onsubmit="return confirm('Delete run #{{ run.id }}?')">
+          <button class="x" type="submit" title="Delete run #{{ run.id }}">&times;</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<div class="runs-empty">No analysis runs yet.</div>
+{% endif %}
+{% endblock %}

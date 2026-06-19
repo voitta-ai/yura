@@ -1,0 +1,157 @@
+{% extends "base.html" %}
+{% block title %}Analyzing… — YURA{% endblock %}
+{% block content %}
+<div class="kicker">{{ repo.name }} · branch {{ repo.branch }}</div>
+<h1 id="hd">{% if run.mode == 'llm' %}LLM Performance Analysis{% else %}Analyzing the history…{% endif %}</h1>
+<p class="dek" id="dek">Run #{{ run.id }} — connecting to the live progress stream…</p>
+
+<div id="errbox" class="errbox" style="display:none"></div>
+
+<!-- Progress bar -->
+<div class="prog" id="progwrap" style="display:none">
+  <div class="prog__bar"><div class="prog__fill" id="fill"></div></div>
+  <div class="prog__pct" id="pct">0%</div>
+</div>
+
+<!-- Live stat strip -->
+<div class="kpis" id="stats" style="display:none">
+  <div class="kpi"><div class="kpi__num" id="s-done">0</div><div class="kpi__lbl">Commits judged</div></div>
+  <div class="kpi"><div class="kpi__num" id="s-total">—</div><div class="kpi__lbl">To judge</div></div>
+  <div class="kpi"><div class="kpi__num" id="s-cost">$0.00</div><div class="kpi__lbl">Est. cost</div></div>
+  <div class="kpi"><div class="kpi__num" id="s-tok">0</div><div class="kpi__lbl">Tokens</div></div>
+  <div class="kpi"><div class="kpi__num" id="s-rate">—</div><div class="kpi__lbl">Commits / min</div></div>
+</div>
+
+<div class="run-meta" id="runmeta"></div>
+
+<!-- Live commit feed -->
+<div class="exhibit" id="feedwrap" style="display:none; margin-top:30px">
+  <div class="exhibit__kicker">Live feed</div>
+  <h2 class="exhibit__title" style="font-size:18px">Commit-by-commit judgments</h2>
+  <div class="feed" id="feed"></div>
+</div>
+
+<!-- Plain status log (used for local mode + phase messages) -->
+<div class="loglist" id="log"></div>
+
+<div id="donebox" style="display:none; margin-top:28px">
+  <a class="btn" id="donelink" href="/runs/{{ run.id }}">View full report →</a>
+</div>
+
+<style>
+  .prog { display:flex; align-items:center; gap:14px; margin:26px 0 8px; }
+  .prog__bar { flex:1; height:10px; background:var(--hair); border-radius:6px; overflow:hidden; }
+  .prog__fill { height:100%; width:0; background:var(--cyan); transition:width .3s ease; }
+  .prog__pct { font-family:var(--serif); font-weight:700; color:var(--navy); font-size:18px; min-width:58px; text-align:right; }
+  .run-meta { font-size:12.5px; color:var(--mute); margin-top:6px; }
+  .loglist { margin-top:18px; font-size:13px; }
+  .loglist .row { padding:6px 0; border-bottom:1px solid var(--hair); color:var(--grey); }
+  .loglist .row b { color:var(--navy); }
+  .feed { max-height:440px; overflow-y:auto; border:1px solid var(--hair); border-top:3px solid var(--cyan); }
+  .fitem { display:flex; gap:14px; align-items:flex-start; padding:10px 14px; border-bottom:1px solid var(--hair); font-size:13px; animation:fadein .35s ease; }
+  .fitem:last-child { border-bottom:0; }
+  @keyframes fadein { from { opacity:0; transform:translateY(-4px);} to {opacity:1;transform:none;} }
+  .fitem__main { flex:1; min-width:0; }
+  .fitem__subj { font-weight:600; color:var(--ink); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .fitem__meta { font-size:11px; color:var(--mute); margin-top:2px; }
+  .fitem__meta .hash { font-family:ui-monospace,Menlo,monospace; }
+  .fitem__rat { font-size:11.5px; color:var(--grey); margin-top:3px; font-style:italic; }
+  .chips { display:flex; gap:6px; flex-shrink:0; }
+  .chip { font-size:10px; font-weight:700; padding:3px 7px; border-radius:3px; text-align:center; min-width:54px; }
+  .chip small { display:block; font-weight:400; font-size:8.5px; letter-spacing:.5px; opacity:.8; text-transform:uppercase; }
+  .chip--q { background:#eaf6ff; color:var(--navy); }
+  .chip--a { background:#e6f6ee; color:var(--good); }
+  .chip--a.low { background:#fbeae8; color:var(--bad); }
+  .chip--ai { background:#f0ecfb; color:#5b3ea8; }
+</style>
+
+<script>
+(function () {
+  var runId = {{ run.id }};
+  var startTs = Date.now();
+  var proto = location.protocol === "https:" ? "wss:" : "ws:";
+  var ws = new WebSocket(proto + "//" + location.host + "/ws/runs/" + runId);
+
+  var el = function (id) { return document.getElementById(id); };
+  function show(id) { el(id).style.display = ""; }
+  function fmtTok(n) { return n >= 1000 ? (n/1000).toFixed(1)+"k" : ""+n; }
+
+  function logRow(html) {
+    var div = document.createElement("div");
+    div.className = "row";
+    div.innerHTML = html;
+    el("log").appendChild(div);
+  }
+
+  function addFeed(c, j) {
+    show("feedwrap");
+    var feed = el("feed");
+    var authLow = j.authenticity < 40 ? " low" : "";
+    var item = document.createElement("div");
+    item.className = "fitem";
+    item.innerHTML =
+      '<div class="fitem__main">' +
+        '<div class="fitem__subj"></div>' +
+        '<div class="fitem__meta"><span class="hash">' + c.hash + '</span> · <span class="who"></span></div>' +
+        '<div class="fitem__rat"></div>' +
+      '</div>' +
+      '<div class="chips">' +
+        '<span class="chip chip--q">' + j.quality + '<small>qual</small></span>' +
+        '<span class="chip chip--a' + authLow + '">' + j.authenticity + '<small>real</small></span>' +
+        '<span class="chip chip--ai">' + j.ai_likelihood + '<small>ai</small></span>' +
+      '</div>';
+    item.querySelector(".fitem__subj").textContent = c.subject;
+    item.querySelector(".who").textContent = c.author;
+    item.querySelector(".fitem__rat").textContent = j.rationale || "";
+    feed.insertBefore(item, feed.firstChild);
+    while (feed.children.length > 60) feed.removeChild(feed.lastChild);
+  }
+
+  function handle(ev) {
+    if (ev.type === "status") {
+      el("dek").textContent = ev.message || "";
+      if (ev.phase === "judging") {
+        show("progwrap"); show("stats");
+        el("s-total").textContent = ev.total;
+        el("runmeta").textContent =
+          "Provider " + ev.provider + " · model " + ev.model +
+          (ev.skipped ? " · " + ev.skipped + " commits not sampled (cap " + ev.cap + ")" : "");
+      } else if (ev.phase !== "start") {
+        logRow(ev.message);
+      }
+    } else if (ev.type === "meta") {
+      logRow("<b>" + ev.commits + "</b> commits · <b>" + ev.developers + "</b> contributors · " +
+             (ev.churn||0).toLocaleString() + " lines changed.");
+    } else if (ev.type === "progress") {
+      el("fill").style.width = ev.percent + "%";
+      el("pct").textContent = ev.percent + "%";
+      el("s-done").textContent = ev.done;
+      el("s-cost").textContent = "$" + ev.cost.toFixed(ev.cost < 1 ? 4 : 2);
+      el("s-tok").textContent = fmtTok(ev.tokens.in + ev.tokens.out);
+      var mins = (Date.now() - startTs) / 60000;
+      el("s-rate").textContent = mins > 0.05 ? Math.round(ev.done / mins) : "—";
+      addFeed(ev.commit, ev.judgment);
+    } else if (ev.type === "done") {
+      el("fill").style.width = "100%"; el("pct").textContent = "100%";
+      el("hd").textContent = "Analysis complete";
+      el("dek").textContent = ev.message || "Done.";
+      el("donelink").href = ev.redirect;
+      show("donebox");
+      setTimeout(function () { window.location.href = ev.redirect; }, 1200);
+    } else if (ev.type === "error") {
+      var box = el("errbox");
+      box.textContent = "Analysis failed — " + ev.message;
+      box.style.display = "";
+      el("hd").textContent = "Analysis failed";
+      el("dek").textContent = "";
+    }
+  }
+
+  ws.onmessage = function (e) { handle(JSON.parse(e.data)); };
+  ws.onerror = function () {
+    el("dek").textContent = "Lost the live stream — reloading to check status…";
+    setTimeout(function () { location.reload(); }, 2500);
+  };
+})();
+</script>
+{% endblock %}

@@ -1,0 +1,277 @@
+{% extends "base.html" %}
+{% set t = report.totals %}
+{% set devs = report.developers %}
+{% set story = report.story or {} %}
+{% set caps = report.captions or {} %}
+{% set leader = devs[0] if devs else None %}
+{% set llm = report.mode == "llm" %}
+{% set ns = namespace(n=0) %}
+{% block title %}{{ repo.name }} — Developer Performance Review{% endblock %}
+{% block content %}
+
+<!-- ── Cover ─────────────────────────────────────────────── -->
+<div class="report-head">
+  <div class="kicker">{{ repo.name }} · branch {{ repo.branch }}</div>
+  <h1 class="report-title">Developer Performance Review</h1>
+  <p class="report-sub">
+    A commit-grounded assessment of {{ t.developers }} contributor{{ '' if t.developers == 1 else 's' }}
+    across {{ t.commits|intcomma }} commits, {{ t.first_date }} → {{ t.last_date }}
+    ({{ t.span_days|intcomma }} days).
+    {% if llm and report.llm_meta %}Every sampled commit was independently reviewed by
+    {{ report.llm_meta.provider }}&nbsp;/&nbsp;{{ report.llm_meta.model }}.{% endif %}
+  </p>
+</div>
+
+<!-- ── Executive summary ─────────────────────────────────── -->
+{% if story.headline %}
+<section class="exec">
+  <div class="exec__label">Executive summary
+    {% if story.by_llm and report.llm_meta %}<span class="exec__byline">· written by {{ report.llm_meta.model }}</span>{% endif %}
+  </div>
+  <h2 class="exec__headline">{{ story.headline }}</h2>
+  {% if story.narrative %}<p class="exec__narr">{{ story.narrative }}</p>{% endif %}
+  {% if story.findings %}
+  <ul class="findings">
+    {% for f in story.findings %}<li>{{ f }}</li>{% endfor %}
+  </ul>
+  {% endif %}
+</section>
+{% endif %}
+
+<!-- ── At a glance ───────────────────────────────────────── -->
+<div class="kpis">
+  <div class="kpi"><div class="kpi__num">{{ t.developers }}</div><div class="kpi__lbl">Contributors</div></div>
+  <div class="kpi"><div class="kpi__num">{{ t.commits|intcomma }}</div><div class="kpi__lbl">Commits</div></div>
+  <div class="kpi"><div class="kpi__num">{{ (t.churn / 1000)|round(1) }}<span class="u">k</span></div><div class="kpi__lbl">Lines changed</div></div>
+  {% if llm and report.llm_totals %}
+  <div class="kpi"><div class="kpi__num">{{ report.llm_totals.avg_quality }}</div><div class="kpi__lbl">Avg quality</div></div>
+  <div class="kpi"><div class="kpi__num">{{ report.llm_totals.avg_authenticity }}</div><div class="kpi__lbl">Avg authenticity</div></div>
+  <div class="kpi"><div class="kpi__num">{{ report.llm_totals.fake }}</div><div class="kpi__lbl">Flagged low-effort</div></div>
+  {% else %}
+  <div class="kpi"><div class="kpi__num">{{ t.files_changed|intcomma }}</div><div class="kpi__lbl">File touches</div></div>
+  <div class="kpi"><div class="kpi__num">{{ t.shitty_commits|intcomma }}</div><div class="kpi__lbl">Low-effort commits</div></div>
+  {% endif %}
+</div>
+
+<!-- ── Section: The ranking ──────────────────────────────── -->
+{% set ns.n = ns.n + 1 %}
+<div class="section-head">
+  <div class="section-head__no">{{ "%02d"|format(ns.n) }}</div>
+  <div class="section-head__txt">
+    <h2>The ranking</h2>
+    <p class="section-head__intro">Where every contributor lands on the blended composite score, highest first.</p>
+  </div>
+</div>
+<div class="exhibit">
+  <div class="exhibit__units">Composite score, 0–100 · weighted: volume {{ (report.weights.volume*100)|int }}% · consistency {{ (report.weights.consistency*100)|int }}% · quality {{ (report.weights.quality*100)|int }}%{% if report.weights.ai_quality %} · model-judged quality {{ (report.weights.ai_quality*100)|int }}%{% endif %}</div>
+  <div class="exhibit__chart">{{ exhibits.ranking|safe }}</div>
+  {% if caps.ranking %}<p class="caption">{{ caps.ranking }}</p>{% endif %}
+</div>
+
+<!-- ── Section: Anatomy of the score ─────────────────────── -->
+{% set ns.n = ns.n + 1 %}
+<div class="section-head">
+  <div class="section-head__no">{{ "%02d"|format(ns.n) }}</div>
+  <div class="section-head__txt">
+    <h2>Anatomy of the score</h2>
+    <p class="section-head__intro">The composite decomposes into independent dimensions — a high total can hide a weak one.</p>
+  </div>
+</div>
+<div class="exhibit">
+  <div class="exhibit__units">Sub-scores, 0–100, per contributor (top 8)</div>
+  <div class="exhibit__chart">{{ exhibits.breakdown|safe }}</div>
+  {% if caps.breakdown %}<p class="caption">{{ caps.breakdown }}</p>{% endif %}
+</div>
+
+<!-- ── Section: Output & cadence ─────────────────────────── -->
+{% set ns.n = ns.n + 1 %}
+<div class="section-head">
+  <div class="section-head__no">{{ "%02d"|format(ns.n) }}</div>
+  <div class="section-head__txt">
+    <h2>Output &amp; cadence</h2>
+    <p class="section-head__intro">Raw productivity — commit counts, code churn, and how activity flowed over time.</p>
+  </div>
+</div>
+<div class="grid-2">
+  <div class="exhibit">
+    <h3 class="exhibit__title">Commit volume by contributor.</h3>
+    <div class="exhibit__units">Non-merge commits</div>
+    <div class="exhibit__chart">{{ exhibits.commits|safe }}</div>
+  </div>
+  <div class="exhibit">
+    <h3 class="exhibit__title">Code churn tells a different story.</h3>
+    <div class="exhibit__units">Lines changed (insertions + deletions)</div>
+    <div class="exhibit__chart">{{ exhibits.churn|safe }}</div>
+  </div>
+</div>
+{% if caps.output %}<p class="caption">{{ caps.output }}</p>{% endif %}
+<div class="exhibit" style="margin-top:34px">
+  <h3 class="exhibit__title">Team commit cadence over time.</h3>
+  <div class="exhibit__units">Commits per month</div>
+  <div class="exhibit__chart">{{ exhibits.timeline|safe }}</div>
+  {% if caps.cadence %}<p class="caption">{{ caps.cadence }}</p>{% endif %}
+</div>
+
+{% if llm %}
+<!-- ── Section: The model's verdict ──────────────────────── -->
+{% set ns.n = ns.n + 1 %}
+<div class="section-head">
+  <div class="section-head__no">{{ "%02d"|format(ns.n) }}</div>
+  <div class="section-head__txt">
+    <h2>The model's verdict</h2>
+    <p class="section-head__intro">Each judged commit scored on craftsmanship and on whether it represents real, substantive work.</p>
+  </div>
+</div>
+<div class="grid-2">
+  <div class="exhibit">
+    <h3 class="exhibit__title">Commit quality by contributor.</h3>
+    <div class="exhibit__units">Mean quality, 0–100 (judged commits)</div>
+    <div class="exhibit__chart">{{ exhibits.quality|safe }}</div>
+  </div>
+  <div class="exhibit">
+    <h3 class="exhibit__title">Authenticity: who ships real work.</h3>
+    <div class="exhibit__units">Mean authenticity, 0–100 — low = trivial / padding</div>
+    <div class="exhibit__chart">{{ exhibits.authenticity|safe }}</div>
+  </div>
+</div>
+{% if caps.quality %}<p class="caption">{{ caps.quality }}</p>{% endif %}
+{% if caps.authenticity %}<p class="caption">{{ caps.authenticity }}</p>{% endif %}
+
+<!-- ── Section: AI adoption ──────────────────────────────── -->
+{% set ns.n = ns.n + 1 %}
+<div class="section-head">
+  <div class="section-head__no">{{ "%02d"|format(ns.n) }}</div>
+  <div class="section-head__txt">
+    <h2>AI adoption</h2>
+    <p class="section-head__intro">How much each contributor's code carries the stylistic fingerprints of AI generation.</p>
+  </div>
+</div>
+<div class="exhibit">
+  <div class="exhibit__units">Mean AI-likelihood, 0–100, from diff style cues</div>
+  <div class="exhibit__chart">{{ exhibits.ai_usage|safe }}</div>
+  {% if caps.ai %}<p class="caption">{{ caps.ai }}</p>{% endif %}
+</div>
+
+{% if report.flagged_commits %}
+<!-- ── Section: Watch list ───────────────────────────────── -->
+{% set ns.n = ns.n + 1 %}
+<div class="section-head">
+  <div class="section-head__no">{{ "%02d"|format(ns.n) }}</div>
+  <div class="section-head__txt">
+    <h2>Watch list</h2>
+    <p class="section-head__intro">The commits the model found least convincing — flagged for a human look.</p>
+  </div>
+</div>
+<div class="exhibit">
+  <div class="exhibit__chart">
+  <table class="tbl">
+    <thead><tr>
+      <th class="l">Commit</th><th class="l">Author</th><th class="l">Subject</th>
+      <th>Qual</th><th>Real</th><th>AI</th><th class="l">Why the model flagged it</th>
+    </tr></thead>
+    <tbody>
+      {% for c in report.flagged_commits %}
+      <tr>
+        <td class="l mono">{{ c.hash }}</td>
+        <td class="l">{{ c.author }}</td>
+        <td class="l">{{ c.subject }}</td>
+        <td>{{ c.quality }}</td>
+        <td>{{ c.authenticity }}</td>
+        <td>{{ c.ai_likelihood }}</td>
+        <td class="l email">{{ c.rationale }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% if caps.watchlist %}<p class="caption">{{ caps.watchlist }}</p>{% endif %}
+</div>
+{% endif %}
+{% endif %}
+
+<!-- ── Section: Full scorecard ───────────────────────────── -->
+{% set ns.n = ns.n + 1 %}
+<div class="section-head">
+  <div class="section-head__no">{{ "%02d"|format(ns.n) }}</div>
+  <div class="section-head__txt">
+    <h2>Full scorecard</h2>
+    <p class="section-head__intro">Every contributor, every metric, ranked by composite score.</p>
+  </div>
+</div>
+<div class="exhibit">
+  <div class="exhibit__chart">
+  <table class="tbl">
+    <thead>
+      <tr>
+        <th class="l">#</th>
+        <th class="l">Contributor</th>
+        <th>Score</th>
+        <th>Commits</th>
+        <th>Churn</th>
+        <th>Net</th>
+        <th>Files</th>
+        <th>Active days</th>
+        {% if llm %}
+        <th>Quality</th><th>Authentic</th><th>AI-lkhd</th><th>Fake</th>
+        {% else %}
+        <th>Low-effort</th><th>AI signals</th>
+        {% endif %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for d in devs %}
+      <tr class="{{ 'top' if loop.first }}">
+        <td class="l rank">{{ d.rank }}</td>
+        <td class="l"><div class="name">{{ d.name }}</div><div class="email">{{ d.email }}</div></td>
+        <td class="score"><span class="scorebar" style="width: {{ (d.score * 0.6)|round }}px"></span> {{ d.score }}</td>
+        <td>{{ d.commits|intcomma }}</td>
+        <td>{{ d.churn|intcomma }}</td>
+        <td>{{ d.net|intcomma }}</td>
+        <td>{{ d.files_changed|intcomma }}</td>
+        <td>{{ d.active_days }}</td>
+        {% if llm %}
+          {% if d.llm and d.llm.judged %}
+        <td class="score">{{ d.llm.avg_quality }}</td>
+        <td>{{ d.llm.avg_authenticity }}</td>
+        <td>{{ d.llm.avg_ai_likelihood }}</td>
+        <td>{{ d.llm.fake_commits }} <span class="email">/ {{ d.llm.judged }}</span></td>
+          {% else %}
+        <td class="email" colspan="4">not sampled</td>
+          {% endif %}
+        {% else %}
+        <td>{{ d.shitty_commits }} <span class="email">({{ (d.shitty_ratio*100)|round }}%)</span></td>
+        <td>{{ d.ai_signal_commits }}</td>
+        {% endif %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+
+<!-- ── Methodology ───────────────────────────────────────── -->
+<div class="method">
+  <h3>Methodology</h3>
+  <p>The composite score blends
+    <strong>volume</strong> (commit count + code churn),
+    <strong>consistency</strong> (active days and cadence over tenure), and
+    <strong>quality</strong> (commit-message discipline and low-effort ratio){% if llm %}, plus
+    <strong>model-judged quality</strong> (craftsmanship and authenticity, weighted 60/40){% endif %}.
+    Scores are shrunk toward zero for small samples (a credibility factor of
+    commits ÷ (commits + 8)) so a single drive-by commit can't out-rank sustained work.</p>
+  {% if llm and report.llm_meta %}
+  <p>{{ report.llm_meta.judged }} commit{{ '' if report.llm_meta.judged == 1 else 's' }}
+    {% if report.llm_meta.sampled %}(sampled across contributors from {{ t.commits|intcomma }}, cap {{ report.llm_meta.cap }}){% endif %}
+    were reviewed by <strong>{{ report.llm_meta.provider }} / {{ report.llm_meta.model }}</strong>,
+    consuming {{ (report.llm_meta.input_tokens + report.llm_meta.output_tokens)|intcomma }} tokens
+    at an estimated <strong>${{ "%.2f"|format(report.llm_meta.cost_usd) }}</strong>{% if report.llm_meta.errors %}
+    ({{ report.llm_meta.errors }} commit{{ '' if report.llm_meta.errors == 1 else 's' }} failed to judge){% endif %}.
+    Authenticity below 40 is flagged low-effort; AI-likelihood above 60 counts as AI-assisted.</p>
+  {% endif %}
+</div>
+
+<div class="foot">
+  <span>YURA · Developer Performance Intelligence</span>
+  <span>Run #{{ run.id }} · generated {{ report.generated_at|humandt }}</span>
+</div>
+{% endblock %}
