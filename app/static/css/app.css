@@ -218,6 +218,12 @@ input:focus, select:focus { outline: none; border-color: var(--cyan);
 .runcfg__cap { width:104px; padding:7px 10px; font-size:18px; font-weight:700; color:var(--navy);
   font-family:var(--serif); text-align:center; }
 .runcfg__arrow { font-size:18px; color:var(--hair); font-weight:700; align-self:flex-end; padding-bottom:3px; }
+.runcfg--model { gap:16px; }
+.runcfg__sel { padding:7px 10px; font-size:14px; font-weight:600; color:var(--navy);
+  font-family:var(--sans); background:var(--paper, #fff); border:1px solid var(--hair);
+  border-radius:6px; min-width:170px; }
+.runcfg__hint { font-size:11.5px; color:var(--mute); align-self:flex-end; padding-bottom:5px; }
+.runcfg__hint a { color:var(--mute); }
 .runline__cost { display:flex; flex-direction:column; gap:3px; max-width:620px; }
 .est-detail { font-size:13px; color:var(--grey); line-height:1.5; }
 .est-detail strong { color:var(--navy); }

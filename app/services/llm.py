@@ -39,8 +39,10 @@ PRICES: dict[str, tuple[float, float]] = {
     "gpt-4.1-nano": (0.1, 0.4),
     "o3": (2.0, 8.0),
     "o4-mini": (1.1, 4.4),
+    "claude-fable-5": (10.0, 50.0),
     "claude-opus-4-8": (5.0, 25.0),
     "claude-opus-4-7": (5.0, 25.0),
+    "claude-opus-4-6": (5.0, 25.0),
     "claude-sonnet-4-6": (3.0, 15.0),
     "claude-haiku-4-5": (1.0, 5.0),
 }
@@ -93,6 +95,7 @@ def estimate_run(
     model: str,
     cap: int,
     sample_n: int = 10,
+    strategy: str = "uniform",
 ) -> dict:
     """Estimate the cost of an LLM run without calling the API.
 
@@ -108,6 +111,7 @@ def estimate_run(
         "judged": judged,
         "sampled": judged < len(non_merge),
         "cap": cap,
+        "strategy": strategy if strategy in STRATEGIES else "uniform",
         "in_price": in_price,
         "out_price": out_price,
         "price_known": price_known(model),
@@ -117,7 +121,7 @@ def estimate_run(
                 "est_output_tokens": 0, "cost": 0.0, "cost_low": 0.0,
                 "cost_high": 0.0}
 
-    sample = sample_commits(commits, min(sample_n, judged))
+    sample = sample_commits(commits, min(sample_n, judged), strategy)
     total_chars = 0
     for c in sample:
         diff = git_service.get_commit_diff(repo_path, c.hash, MAX_DIFF_CHARS)
@@ -149,16 +153,26 @@ class JudgeTotals:
     by_hash: dict[str, dict] = field(default_factory=dict)
 
 
-def sample_commits(commits: list[Commit], cap: int) -> list[Commit]:
-    """Pick up to `cap` non-merge commits, stratified across authors by recency.
+STRATEGIES = ("uniform", "last")
 
-    Round-robins newest-first through each author so every contributor gets
-    coverage rather than the cap being eaten by the most prolific dev.
+
+def sample_commits(
+    commits: list[Commit], cap: int, strategy: str = "uniform"
+) -> list[Commit]:
+    """Pick up to `cap` non-merge commits according to `strategy`.
+
+    - "uniform": round-robins newest-first across authors so every contributor
+      gets coverage rather than the cap being eaten by the most prolific dev.
+    - "last": simply the `cap` most-recent commits, regardless of author.
     """
     non_merge = [c for c in commits if not c.is_merge]
     if len(non_merge) <= cap:
         return non_merge
 
+    if strategy == "last":
+        return sorted(non_merge, key=lambda c: c.committer_ts, reverse=True)[:cap]
+
+    # "uniform" (default): stratified round-robin across authors.
     by_author: dict[str, list[Commit]] = defaultdict(list)
     for c in non_merge:
         by_author[c.author_email].append(c)

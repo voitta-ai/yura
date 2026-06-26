@@ -11,6 +11,7 @@ from app.config import settings
 from app.db import SessionLocal, get_db
 from app.models import Repository
 from app.services import git_service
+from app.services import models_service
 from app.services import settings_store as store
 from app.templating import templates
 
@@ -73,10 +74,29 @@ def repo_detail(repo_id: int, request: Request, db: Session = Depends(get_db)):
     repo = db.get(Repository, repo_id)
     if repo is None:
         return RedirectResponse(url="/", status_code=303)
-    cap = int(store.get(db, "max_commits_per_run") or 300)
+    values = store.get_all(db)
+    cap = int(values.get("max_commits_per_run") or 300)
+    # Per-provider model lists for the on-page model/provider picker (lets the
+    # user experiment with cost projections without touching global Settings).
+    anthropic_models, _ = models_service.list_models(
+        "anthropic", values["anthropic_api_key"], current=values["anthropic_model"]
+    )
+    openai_models, _ = models_service.list_models(
+        "openai", values["openai_api_key"], current=values["openai_model"]
+    )
     return templates.TemplateResponse(
         "repo.html",
-        {"request": request, "repo": repo, "runs": repo.runs, "cap": cap},
+        {
+            "request": request,
+            "repo": repo,
+            "runs": repo.runs,
+            "cap": cap,
+            "provider": values["llm_provider"],
+            "anthropic_model": values["anthropic_model"],
+            "openai_model": values["openai_model"],
+            "anthropic_models": anthropic_models,
+            "openai_models": openai_models,
+        },
     )
 
 

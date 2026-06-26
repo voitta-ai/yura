@@ -31,11 +31,18 @@ def _clamp_cap(cap: int | None) -> int | None:
     return max(CAP_MIN, min(CAP_MAX, cap))
 
 
+def _norm_strategy(strategy: str | None) -> str:
+    return strategy if strategy in llm.STRATEGIES else "uniform"
+
+
 @router.post("/repos/{repo_id}/analyze")
 async def run_analysis(
     repo_id: int,
     mode: str = "local",
     cap: int | None = None,
+    provider: str | None = None,
+    model: str | None = None,
+    strategy: str | None = None,
     db: Session = Depends(get_db),
 ):
     repo = db.get(Repository, repo_id)
@@ -47,29 +54,58 @@ async def run_analysis(
     db.commit()
     db.refresh(run)
 
-    task = asyncio.create_task(_run_analysis(run.id, mode, _clamp_cap(cap)))
+    task = asyncio.create_task(
+        _run_analysis(
+            run.id, mode, _clamp_cap(cap), provider, model, _norm_strategy(strategy)
+        )
+    )
     _tasks.add(task)
     task.add_done_callback(_tasks.discard)
 
     return RedirectResponse(url=f"/runs/{run.id}", status_code=303)
 
 
+def _resolve_llm(s: dict, provider: str | None, model: str | None) -> dict:
+    """Pick provider/model/api_key from saved settings, honoring per-run overrides."""
+    eff_provider = provider if provider in ("anthropic", "openai") else s["llm_provider"]
+    if model:
+        eff_model = model
+    else:
+        eff_model = s["anthropic_model"] if eff_provider == "anthropic" else s["openai_model"]
+    api_key = s["anthropic_api_key"] if eff_provider == "anthropic" else s["openai_api_key"]
+    return {"provider": eff_provider, "model": eff_model, "api_key": api_key}
+
+
 @router.get("/repos/{repo_id}/estimate")
 def estimate_cost(
-    repo_id: int, cap: int | None = None, db: Session = Depends(get_db)
+    repo_id: int,
+    cap: int | None = None,
+    provider: str | None = None,
+    model: str | None = None,
+    strategy: str | None = None,
+    db: Session = Depends(get_db),
 ):
-    """Pre-run cost estimate (JSON). `cap` overrides the saved scan limit."""
+    """Pre-run cost estimate (JSON).
+
+    `cap` overrides the saved scan limit; `provider`/`model` override the saved
+    LLM choice; `strategy` selects which commits are sampled (uniform | last).
+    """
     repo = db.get(Repository, repo_id)
     if repo is None or repo.clone_status != "ready":
         return JSONResponse({"error": "Repository is not cloned yet."}, status_code=400)
     s = store.get_all(db)
-    provider = s["llm_provider"]
-    model = s["anthropic_model"] if provider == "anthropic" else s["openai_model"]
-    key = s["anthropic_api_key"] if provider == "anthropic" else s["openai_api_key"]
+    llm_cfg = _resolve_llm(s, provider, model)
     eff_cap = _clamp_cap(cap) or int(s.get("max_commits_per_run") or 300)
     commits = git_service.parse_log(Path(repo.local_path), repo.branch)
-    est = llm.estimate_run(commits, Path(repo.local_path), model, eff_cap)
-    est.update({"provider": provider, "model": model, "has_key": bool(key)})
+    est = llm.estimate_run(
+        commits, Path(repo.local_path), llm_cfg["model"], eff_cap,
+        strategy=_norm_strategy(strategy),
+    )
+    est.update({
+        "provider": llm_cfg["provider"],
+        "model": llm_cfg["model"],
+        "has_key": bool(llm_cfg["api_key"]),
+    })
     return JSONResponse(est)
 
 
@@ -152,7 +188,14 @@ async def ws_run(websocket: WebSocket, run_id: int):
 # --------------------------------------------------------------------------- #
 
 
-async def _run_analysis(run_id: int, mode: str, cap_override: int | None = None) -> None:
+async def _run_analysis(
+    run_id: int,
+    mode: str,
+    cap_override: int | None = None,
+    provider_override: str | None = None,
+    model_override: str | None = None,
+    strategy: str = "uniform",
+) -> None:
     """Run the analysis on the event loop, emitting progress as it goes."""
 
     def emit(event: dict) -> None:
@@ -163,9 +206,12 @@ async def _run_analysis(run_id: int, mode: str, cap_override: int | None = None)
           "message": "Starting analysis…"})
 
     try:
-        ctx = await asyncio.to_thread(_load_ctx, run_id)
+        ctx = await asyncio.to_thread(
+            _load_ctx, run_id, provider_override, model_override
+        )
         if cap_override:
             ctx["cap"] = cap_override
+        ctx["strategy"] = strategy
         repo_path = Path(ctx["local_path"])
         branch = ctx["branch"]
 
@@ -207,15 +253,17 @@ async def _run_llm_phase(run_id, emit, report, commits, ctx, repo_path) -> None:
     model = ctx["model"]
     api_key = ctx["api_key"]
     cap = ctx["cap"]
+    strategy = ctx.get("strategy", "uniform")
 
     if not api_key:
         raise RuntimeError(
             f"No {provider} API key configured — set one in Settings."
         )
 
-    sample = llm.sample_commits(commits, cap)
+    sample = llm.sample_commits(commits, cap, strategy)
     total = len(sample)
     skipped = report["totals"]["commits"] - total
+    strat_label = "most recent" if strategy == "last" else "across contributors"
     emit({
         "type": "status",
         "phase": "judging",
@@ -223,10 +271,11 @@ async def _run_llm_phase(run_id, emit, report, commits, ctx, repo_path) -> None:
         "model": model,
         "total": total,
         "cap": cap,
+        "strategy": strategy,
         "skipped": max(0, skipped),
         "message": (
             f"Judging {total} commit(s) with {provider}/{model}"
-            + (f" (sampled from {report['totals']['commits']}, cap {cap})"
+            + (f" ({strat_label}, sampled from {report['totals']['commits']}, cap {cap})"
                if skipped > 0 else "")
             + "…"
         ),
@@ -278,6 +327,7 @@ async def _run_llm_phase(run_id, emit, report, commits, ctx, repo_path) -> None:
         "output_tokens": totals.output_tokens,
         "cost_usd": round(totals.cost_usd, 4),
         "cap": cap,
+        "strategy": strategy,
         "sampled": total < report["totals"]["commits"],
     }
 
@@ -305,19 +355,23 @@ def _set_status(run_id: int, status: str, message: str) -> None:
         db.close()
 
 
-def _load_ctx(run_id: int) -> dict:
+def _load_ctx(
+    run_id: int,
+    provider_override: str | None = None,
+    model_override: str | None = None,
+) -> dict:
     db = SessionLocal()
     try:
         run = db.get(AnalysisRun, run_id)
         repo = run.repository
         s = store.get_all(db)
-        provider = s["llm_provider"]
+        llm_cfg = _resolve_llm(s, provider_override, model_override)
         return {
             "local_path": repo.local_path,
             "branch": repo.branch,
-            "provider": provider,
-            "model": s["anthropic_model"] if provider == "anthropic" else s["openai_model"],
-            "api_key": s["anthropic_api_key"] if provider == "anthropic" else s["openai_api_key"],
+            "provider": llm_cfg["provider"],
+            "model": llm_cfg["model"],
+            "api_key": llm_cfg["api_key"],
             "cap": int(s.get("max_commits_per_run") or 300),
         }
     finally:

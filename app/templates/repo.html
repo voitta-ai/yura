@@ -48,11 +48,41 @@
         <input type="number" id="rc-cap" class="runcfg__cap" min="1" max="5000"
                step="50" value="{{ cap }}">
       </div>
+      <div class="runcfg__item">
+        <span class="runcfg__lbl">Sampling</span>
+        <select id="rc-strategy" class="runcfg__sel">
+          <option value="uniform">Uniform (across contributors)</option>
+          <option value="last">Last (most recent commits)</option>
+        </select>
+      </div>
       <div class="runcfg__arrow">=</div>
       <div class="runcfg__item">
         <span class="runcfg__lbl">Commits judged</span>
         <span class="runcfg__val" id="rc-judge">—</span>
       </div>
+    </div>
+    <div class="runcfg runcfg--model">
+      <div class="runcfg__item">
+        <span class="runcfg__lbl">Provider</span>
+        <select id="rc-provider" class="runcfg__sel">
+          <option value="anthropic" {% if provider == "anthropic" %}selected{% endif %}>Anthropic</option>
+          <option value="openai" {% if provider == "openai" %}selected{% endif %}>OpenAI</option>
+        </select>
+      </div>
+      <div class="runcfg__item">
+        <span class="runcfg__lbl">Model</span>
+        <select id="rc-model-anthropic" class="runcfg__sel" data-provider="anthropic">
+          {% for m in anthropic_models %}
+          <option value="{{ m }}" {% if m == anthropic_model %}selected{% endif %}>{{ m }}</option>
+          {% endfor %}
+        </select>
+        <select id="rc-model-openai" class="runcfg__sel" data-provider="openai">
+          {% for m in openai_models %}
+          <option value="{{ m }}" {% if m == openai_model %}selected{% endif %}>{{ m }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <span class="runcfg__hint">Per-run override · the default lives in <a href="/settings">Settings</a>.</span>
     </div>
     <p class="runline__cost" id="est-line">Estimating cost…</p>
     <form action="/repos/{{ repo.id }}/analyze?mode=local" method="post" class="runline__alt">
@@ -71,6 +101,12 @@
   var totalEl = document.getElementById("rc-total");
   var judgeEl = document.getElementById("rc-judge");
   var formLLM = document.getElementById("form-llm");
+  var strategySel = document.getElementById("rc-strategy");
+  var providerSel = document.getElementById("rc-provider");
+  var modelSels = {
+    anthropic: document.getElementById("rc-model-anthropic"),
+    openai: document.getElementById("rc-model-openai"),
+  };
   var base = "/repos/{{ repo.id }}/analyze";
   var timer = null;
 
@@ -83,20 +119,39 @@
     return v;
   }
 
-  function syncForm(cap) { formLLM.action = base + "?mode=llm&cap=" + cap; }
+  // Show only the active provider's model dropdown; return {provider, model}.
+  function llmChoice() {
+    var provider = providerSel.value;
+    Object.keys(modelSels).forEach(function (p) {
+      if (modelSels[p]) modelSels[p].style.display = p === provider ? "" : "none";
+    });
+    var sel = modelSels[provider];
+    return { provider: provider, model: sel ? sel.value : "" };
+  }
+
+  function query(cap) {
+    var c = llmChoice();
+    return "cap=" + cap +
+      "&provider=" + encodeURIComponent(c.provider) +
+      "&model=" + encodeURIComponent(c.model) +
+      "&strategy=" + encodeURIComponent(strategySel.value);
+  }
+
+  function syncForm(cap) { formLLM.action = base + "?mode=llm&" + query(cap); }
 
   async function estimate() {
     var cap = clampCap();
     syncForm(cap);
     line.textContent = "Estimating cost…";
     try {
-      var d = await (await fetch(base.replace("/analyze","") + "/estimate?cap=" + cap)).json();
+      var d = await (await fetch(base.replace("/analyze","") + "/estimate?" + query(cap))).json();
       if (d.error) { line.textContent = d.error; return; }
       totalEl.textContent = d.total_commits.toLocaleString();
       judgeEl.textContent = d.judged.toLocaleString();
+      var how = d.strategy === "last" ? "most recent" : "spread across contributors";
       var detail = "Judging <strong>" + d.judged.toLocaleString() + "</strong> commit" +
         (d.judged === 1 ? "" : "s") +
-        (d.sampled ? " (sampled across contributors from " + d.total_commits.toLocaleString() + ")"
+        (d.sampled ? " (" + how + ", from " + d.total_commits.toLocaleString() + ")"
                    : " — the full history") +
         " with <strong>" + d.provider + " / " + d.model + "</strong>.";
       var cost = "Estimated <strong class='big'>≈ " + money(d.cost) + "</strong>" +
@@ -119,6 +174,12 @@
   capInput.addEventListener("change", function () {
     capInput.value = clampCap();  // snap to bounds on commit
   });
+  strategySel.addEventListener("change", estimate);
+  providerSel.addEventListener("change", estimate);
+  Object.keys(modelSels).forEach(function (p) {
+    if (modelSels[p]) modelSels[p].addEventListener("change", estimate);
+  });
+  llmChoice();  // set initial dropdown visibility before the first estimate
   estimate();
 })();
 </script>
