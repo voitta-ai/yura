@@ -420,6 +420,47 @@ def _build_exhibits(report: dict) -> dict:
             report["timeline"]["labels"], report["timeline"]["total"]
         ),
     }
+
+    # Scatter exhibits that work in both modes (no model judgement needed).
+    # Cap to the most active contributors so the field stays legible.
+    scatter_devs = sorted(devs, key=lambda d: d["commits"], reverse=True)[:16]
+    # B — Consistency landscape: active days (x) vs commits (y), bubble = churn.
+    exhibits["consistency"] = charts.scatter(
+        [
+            {
+                "x": d["active_days"],
+                "y": d["commits"],
+                "size": d["churn"],
+                "label": d["name"],
+                "highlight": d["rank"] == 1,
+            }
+            for d in scatter_devs
+        ],
+        x_title="Active days  (tenure of effort) →",
+        y_title="Commits  (log scale) →",
+        y_scale="log",
+        quadrants={"tr": "SUSTAINED", "tl": "BURST", "br": "STEADY TRICKLE", "bl": "OCCASIONAL"},
+    )
+    # D — Builders vs refactorers: insertions (x) vs deletions (y), bubble = commits.
+    exhibits["build_refactor"] = charts.scatter(
+        [
+            {
+                "x": d["insertions"],
+                "y": d["deletions"],
+                "size": d["commits"],
+                "label": d["name"],
+                "highlight": d["rank"] == 1,
+            }
+            for d in scatter_devs
+        ],
+        x_title="Lines inserted  (log scale) →",
+        y_title="Lines deleted  (log scale) →",
+        x_scale="log",
+        y_scale="log",
+        quadrants={"tr": "CHURNERS", "tl": "REFACTORERS", "br": "BUILDERS", "bl": "LIGHT TOUCH"},
+        tint=None,  # neither corner is unambiguously "good" here
+    )
+
     if report.get("mode") == "llm":
         judged = [d for d in top if d.get("llm", {}).get("judged")]
         exhibits["quality"] = charts.hbar(
@@ -455,4 +496,91 @@ def _build_exhibits(report: dict) -> dict:
                 for d in judged[:8]
             ]
         )
+        # Hero: quality × output matrix. Cap to the top contributors by output
+        # so the field stays legible (the long tail of 1-commit authors would
+        # otherwise pile up and collide).
+        matrix_devs = sorted(
+            [d for d in devs if d.get("llm", {}).get("judged")],
+            key=lambda d: d["commits"],
+            reverse=True,
+        )[:16]
+        exhibits["matrix"] = charts.quality_matrix(
+            [
+                {
+                    "label": d["name"],
+                    "output": d["commits"],
+                    "quality": d["llm"]["avg_quality"],
+                    "churn": d["churn"],
+                    "highlight": d["rank"] == 1,
+                }
+                for d in matrix_devs
+            ]
+        )
+        # A — Authenticity vs AI-likelihood: does AI-assisted code stay real?
+        exhibits["auth_ai"] = charts.scatter(
+            [
+                {
+                    "x": d["llm"]["avg_ai_likelihood"],
+                    "y": d["llm"]["avg_authenticity"],
+                    "size": d["commits"],
+                    "label": d["name"],
+                    "highlight": d["rank"] == 1,
+                }
+                for d in matrix_devs
+            ],
+            x_title="AI-likelihood  (diff style cues) →",
+            y_title="Authenticity →",
+            x_clamp=(0, 100),
+            y_clamp=(0, 100),
+            y_zoom=True,
+            quadrants={
+                "tr": "AI-ASSISTED, REAL",
+                "tl": "GENUINE CRAFT",
+                "br": "AI SLOP",
+                "bl": "HUMAN PADDING",
+            },
+            tint=("tl", charts.CYAN, "br", charts.NAVY),  # good = genuine craft (top-left)
+        )
+        # C — Surgical vs bulk: churn-per-commit (x, log) vs quality (y).
+        exhibits["surgical"] = charts.scatter(
+            [
+                {
+                    "x": d["churn"] / max(1, d["commits"]),
+                    "y": d["llm"]["avg_quality"],
+                    "size": d["commits"],
+                    "label": d["name"],
+                    "highlight": d["rank"] == 1,
+                }
+                for d in matrix_devs
+            ],
+            x_title="Churn per commit  (log scale) →",
+            y_title="Model-judged quality →",
+            x_scale="log",
+            y_zoom=True,
+            y_clamp=(0, 100),
+            quadrants={
+                "tr": "BULK, POLISHED",
+                "tl": "SURGICAL",
+                "br": "SPRAWL",
+                "bl": "TRIVIAL",
+            },
+            tint=("tl", charts.CYAN, "br", charts.NAVY),  # good = surgical (small, high-quality)
+        )
+        # RACE fingerprints — radar per top judged contributor.
+        exhibits["radars"] = [
+            {
+                "name": d["name"],
+                "svg": charts.race_radar(
+                    d["name"],
+                    {
+                        "readability": d["llm"].get("avg_readability", 0),
+                        "maintainability": d["llm"].get("avg_maintainability", 0),
+                        "correctness": d["llm"].get("avg_correctness", 0),
+                        "efficiency": d["llm"].get("avg_efficiency", 0),
+                    },
+                    highlight=(d["rank"] == 1),
+                ),
+            }
+            for d in judged[:6]
+        ]
     return exhibits

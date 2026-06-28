@@ -53,6 +53,27 @@
   {% endif %}
 </div>
 
+{% if exhibits.matrix %}
+<!-- ── Hero: the performance landscape ───────────────────── -->
+{% set ns.n = ns.n + 1 %}
+<div class="section-head">
+  <div class="section-head__no">{{ "%02d"|format(ns.n) }}</div>
+  <div class="section-head__txt">
+    <h2>The performance landscape</h2>
+    <p class="section-head__intro">Every judged contributor placed by <strong>how much</strong> they ship (horizontal) against <strong>how well</strong> the model judges it (vertical). Bubble size is code volume. The dashed crosshair is the team median — splitting the field into four archetypes.</p>
+  </div>
+</div>
+<div class="exhibit exhibit--hero">
+  <div class="exhibit__chart">{{ exhibits.matrix|safe }}</div>
+  <div class="quad-key">
+    <span><b>Stars</b> — high output, high quality</span>
+    <span><b>Craftspeople</b> — fewer commits, excellent quality</span>
+    <span><b>Workhorses</b> — high output, quality to watch</span>
+    <span><b>Watch</b> — low on both axes</span>
+  </div>
+</div>
+{% endif %}
+
 <!-- ── Section: The ranking ──────────────────────────────── -->
 {% set ns.n = ns.n + 1 %}
 <div class="section-head">
@@ -112,6 +133,34 @@
   {% if caps.cadence %}<p class="caption">{{ caps.cadence }}</p>{% endif %}
 </div>
 
+{% if exhibits.consistency %}
+<div class="exhibit exhibit--hero" style="margin-top:34px">
+  <h3 class="exhibit__title">Consistency landscape — sustained effort vs bursts.</h3>
+  <div class="exhibit__units">Active days (x) × commits (y, log) · bubble = code churn</div>
+  <div class="exhibit__chart">{{ exhibits.consistency|safe }}</div>
+  <div class="quad-key">
+    <span><b>Sustained</b> — many active days, high volume</span>
+    <span><b>Burst</b> — high volume in few days</span>
+    <span><b>Steady trickle</b> — present often, ships little</span>
+    <span><b>Occasional</b> — low on both</span>
+  </div>
+</div>
+{% endif %}
+
+{% if exhibits.build_refactor %}
+<div class="exhibit exhibit--hero" style="margin-top:34px">
+  <h3 class="exhibit__title">Builders vs refactorers — what kind of change.</h3>
+  <div class="exhibit__units">Lines inserted (x, log) × lines deleted (y, log) · bubble = commits</div>
+  <div class="exhibit__chart">{{ exhibits.build_refactor|safe }}</div>
+  <div class="quad-key">
+    <span><b>Builders</b> — add far more than they remove</span>
+    <span><b>Refactorers</b> — delete more than they add</span>
+    <span><b>Churners</b> — heavy add <em>and</em> delete</span>
+    <span><b>Light touch</b> — small footprint either way</span>
+  </div>
+</div>
+{% endif %}
+
 {% if llm %}
 <!-- ── Section: The model's verdict ──────────────────────── -->
 {% set ns.n = ns.n + 1 %}
@@ -137,16 +186,42 @@
 {% if caps.quality %}<p class="caption">{{ caps.quality }}</p>{% endif %}
 {% if caps.authenticity %}<p class="caption">{{ caps.authenticity }}</p>{% endif %}
 
-{% if exhibits.race %}
+{% if exhibits.surgical %}
+<div class="exhibit exhibit--hero" style="margin-top:34px">
+  <h3 class="exhibit__title">Surgical vs bulk — does focus pay off?</h3>
+  <div class="exhibit__units">Churn per commit (x, log) × model-judged quality (y) · bubble = commits</div>
+  <div class="exhibit__chart">{{ exhibits.surgical|safe }}</div>
+  <div class="quad-key">
+    <span><b>Surgical</b> — small, tightly-scoped, high quality</span>
+    <span><b>Bulk, polished</b> — large commits that still score well</span>
+    <span><b>Sprawl</b> — large commits, quality to watch</span>
+    <span><b>Trivial</b> — small and low-scoring</span>
+  </div>
+</div>
+{% endif %}
+
+{% if exhibits.radars %}
 <div class="exhibit" style="margin-top:34px">
-  <h3 class="exhibit__title">RACE profile — the four quality dimensions, decomposed.</h3>
-  <div class="exhibit__units">Readability · Maintainability · Correctness · Efficiency, 0–100 (top 8 judged)</div>
-  <div class="exhibit__chart">{{ exhibits.race|safe }}</div>
+  <h3 class="exhibit__title">RACE fingerprints — every contributor has a shape.</h3>
+  <div class="exhibit__units">Readability · Maintainability · Correctness · Efficiency, 0–100 (top judged)</div>
+  <div class="radar-grid">
+    {% for r in exhibits.radars %}
+    <div class="radar-cell">{{ r.svg|safe }}</div>
+    {% endfor %}
+  </div>
   {% if report.llm_totals and report.llm_totals.static_files %}
   <p class="caption">Grounded in {{ report.llm_totals.static_files|intcomma }} statically-analyzed files
     ({{ report.llm_totals.lint_findings|intcomma }} lint/complexity findings; peak cyclomatic complexity {{ report.llm_totals.max_ccn }}).
-    Maintainability and correctness scores are pulled down where the analyzer flags high complexity or bug-prone patterns.</p>
+    Maintainability and correctness are pulled down where the analyzer flags high complexity or bug-prone patterns.</p>
   {% endif %}
+</div>
+{% endif %}
+
+{% if exhibits.race %}
+<div class="exhibit" style="margin-top:34px">
+  <h3 class="exhibit__title">RACE profile — the four dimensions, side by side.</h3>
+  <div class="exhibit__units">Readability · Maintainability · Correctness · Efficiency, 0–100 (top 8 judged)</div>
+  <div class="exhibit__chart">{{ exhibits.race|safe }}</div>
 </div>
 {% endif %}
 
@@ -164,6 +239,20 @@
   <div class="exhibit__chart">{{ exhibits.ai_usage|safe }}</div>
   {% if caps.ai %}<p class="caption">{{ caps.ai }}</p>{% endif %}
 </div>
+
+{% if exhibits.auth_ai %}
+<div class="exhibit exhibit--hero" style="margin-top:34px">
+  <h3 class="exhibit__title">Is the AI-assisted code actually real?</h3>
+  <div class="exhibit__units">AI-likelihood (x) × authenticity (y) · bubble = commits</div>
+  <div class="exhibit__chart">{{ exhibits.auth_ai|safe }}</div>
+  <div class="quad-key">
+    <span><b>Genuine craft</b> — low AI signal, high authenticity</span>
+    <span><b>AI-assisted, real</b> — AI-flavored but substantive</span>
+    <span><b>AI slop</b> — AI-flavored and low authenticity</span>
+    <span><b>Human padding</b> — low AI signal, still trivial</span>
+  </div>
+</div>
+{% endif %}
 
 {% if report.flagged_commits %}
 <!-- ── Section: Watch list ───────────────────────────────── -->
