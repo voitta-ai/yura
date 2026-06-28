@@ -8,3 +8,6 @@ workspace/
 *.sqlite
 *.sqlite3
 .DS_Store
+
+# Harvested research PDFs (392 MB) — re-fetch with arxiv/fetch.py
+arxiv/pdfs/

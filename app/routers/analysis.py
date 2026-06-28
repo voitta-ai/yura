@@ -440,4 +440,19 @@ def _build_exhibits(report: dict) -> dict:
                 for d in judged
             ]
         )
+        # RACE profile — the four quality dimensions per contributor.
+        exhibits["race"] = charts.grouped_score(
+            [
+                {
+                    "label": d["name"],
+                    "values": {
+                        "readability": d["llm"].get("avg_readability", 0),
+                        "maintainability": d["llm"].get("avg_maintainability", 0),
+                        "correctness": d["llm"].get("avg_correctness", 0),
+                        "efficiency": d["llm"].get("avg_efficiency", 0),
+                    },
+                }
+                for d in judged[:8]
+            ]
+        )
     return exhibits

@@ -51,6 +51,7 @@ class Commit:
     insertions: int = 0
     deletions: int = 0
     files_changed: int = 0
+    files: list[str] = field(default_factory=list)  # changed paths (added/modified)
 
     @property
     def is_merge(self) -> bool:
@@ -211,8 +212,35 @@ def parse_log(repo_path: Path, branch: str | None = None) -> list[Commit]:
                 continue
             ins = 0 if m.group(1) == "-" else int(m.group(1))
             dels = 0 if m.group(2) == "-" else int(m.group(2))
+            path = m.group(3)
             commit.insertions += ins
             commit.deletions += dels
             commit.files_changed += 1
+            # Skip pure deletions and binary files (numstat shows "-\t-").
+            if not (m.group(1) == "-" and m.group(2) == "-"):
+                # Handle rename syntax "old => new" / "{a => b}" → keep new path.
+                if " => " in path:
+                    path = re.sub(r"\{.*? => (.*?)\}", r"\1", path)
+                    path = path.split(" => ")[-1].strip()
+                commit.files.append(path)
         commits.append(commit)
     return commits
+
+
+def get_file_at_revision(
+    repo_path: Path, commit_hash: str, file_path: str, max_bytes: int = 200_000
+) -> str | None:
+    """Return file contents as they were at a given commit (git show sha:path).
+
+    Returns None if the path didn't exist at that revision or looks binary.
+    """
+    try:
+        out = _run(
+            ["git", "-C", str(repo_path), "show", f"{commit_hash}:{file_path}"],
+            timeout=30,
+        )
+    except GitError:
+        return None
+    if "\x00" in out[:1024]:  # crude binary check
+        return None
+    return out[:max_bytes]

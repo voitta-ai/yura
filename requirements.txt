@@ -9,3 +9,6 @@ httpx==0.28.1
 # LLM providers (used in phase 2 — analysis judges)
 anthropic==0.42.0
 openai==1.59.6
+# Multi-language static analysis (RACE grounding for the LLM judge)
+lizard==1.23.0
+ruff==0.15.20

@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Awaitable, Callable
 
 from app.services import git_service
+from app.services import static_analysis
 from app.services.git_service import Commit
 
 MAX_DIFF_CHARS = 6000
@@ -48,20 +49,40 @@ PRICES: dict[str, tuple[float, float]] = {
 }
 _DEFAULT_PRICE = (1.0, 5.0)
 
+# RACE dimensions (Readability, mAintainability, Correctness, Efficiency) +
+# authenticity + AI-likelihood. Anchored, gradeable criteria per axis — the
+# fix for the vague-rubric unreliability documented in arXiv 2512.20159 (AXIOM).
+# Static-analysis findings are supplied as EVIDENCE and the judge is told to
+# ground its scores in them (arXiv 2508.14419).
 _SYSTEM = (
-    "You are a meticulous staff engineer auditing a git history to assess "
-    "developer performance. For each commit you see the message, change stats, "
-    "and a (possibly truncated) unified diff. Judge the commit honestly and "
-    "skeptically. Respond with ONLY a JSON object, no prose."
+    "You are a meticulous staff engineer auditing a git commit to assess a "
+    "developer's work. You are given the commit message, change statistics, a "
+    "(possibly truncated) unified diff, and — when available — objective static-"
+    "analysis findings for the changed code. Ground your scores in that "
+    "evidence; do not invent flaws the evidence does not support, and do not "
+    "ignore flaws it does. Judge honestly and skeptically. Reply with ONLY a "
+    "JSON object, no prose."
 )
 
 _SCHEMA_HINT = (
-    'Return JSON exactly like: {"quality": <0-100>, "authenticity": <0-100>, '
-    '"ai_likelihood": <0-100>, "rationale": "<one concise sentence>"}. '
-    "quality = code and message craftsmanship. "
-    "authenticity = 100 for substantive real engineering, low for trivial, "
-    "padding, whitespace-only, auto-generated, or fake busy-work commits. "
-    "ai_likelihood = how likely the code was AI-generated, from style cues."
+    "Score each axis 0-100 (higher is better) using these anchors:\n"
+    "- readability: naming, structure, comments where useful, no dead code. "
+    "(<40: cryptic/unstructured; >80: clear and idiomatic.)\n"
+    "- maintainability: low complexity, small focused functions, no needless "
+    "duplication or over-long signatures. Lower scores when static analysis "
+    "reports high cyclomatic complexity or long functions.\n"
+    "- correctness: the change looks logically sound and complete for its stated "
+    "intent; no obvious bugs, error-handling gaps, or lint-flagged defects. "
+    "(Down-weight when static analysis flags bug-prone patterns.)\n"
+    "- efficiency: no obvious wasteful work, redundant passes, or pathological "
+    "patterns; reasonable data structures. Use 70 as neutral when not assessable.\n"
+    "- authenticity: 100 for substantive real engineering; low for trivial, "
+    "padding, whitespace-only, auto-generated, or fake busy-work commits.\n"
+    "- ai_likelihood: how likely the code was AI-generated, from style cues.\n"
+    'Return JSON exactly like: {"readability": <int>, "maintainability": <int>, '
+    '"correctness": <int>, "efficiency": <int>, "authenticity": <int>, '
+    '"ai_likelihood": <int>, "rationale": "<one concise sentence citing the '
+    'most important evidence>"}.'
 )
 
 
@@ -195,32 +216,57 @@ def sample_commits(
     return picked
 
 
-def _build_prompt(commit: Commit, diff: str) -> str:
+def _build_prompt(commit: Commit, diff: str, evidence: str = "") -> str:
     body = (commit.body or "").strip()
     body_part = f"\n{body[:500]}" if body else ""
+    evidence_part = (
+        f"\nStatic-analysis evidence (objective, from the changed code):\n{evidence}\n"
+        if evidence
+        else ""
+    )
     return (
         f"Commit {commit.hash[:10]} by {commit.author_name}\n"
         f"Message: {commit.subject}{body_part}\n"
         f"Stats: +{commit.insertions} -{commit.deletions} across "
-        f"{commit.files_changed} file(s)\n\n"
+        f"{commit.files_changed} file(s)\n"
+        f"{evidence_part}\n"
         f"Diff:\n{diff or '(no textual diff)'}\n\n"
         f"{_SCHEMA_HINT}"
     )
 
 
+# RACE blend → a single 0-100 "quality" for the composite score. Maintainability
+# and correctness weighted most; efficiency least (often not assessable).
+QUALITY_WEIGHTS = {
+    "readability": 0.25,
+    "maintainability": 0.30,
+    "correctness": 0.30,
+    "efficiency": 0.15,
+}
+RACE_AXES = ("readability", "maintainability", "correctness", "efficiency")
+
+
 def _normalize(data: dict) -> dict:
-    def clamp(v) -> int:
+    def clamp(v, default=50) -> int:
         try:
             return max(0, min(100, int(round(float(v)))))
         except (TypeError, ValueError):
-            return 50
+            return default
 
-    return {
-        "quality": clamp(data.get("quality")),
+    out = {
+        "readability": clamp(data.get("readability")),
+        "maintainability": clamp(data.get("maintainability")),
+        "correctness": clamp(data.get("correctness")),
+        "efficiency": clamp(data.get("efficiency"), default=70),
         "authenticity": clamp(data.get("authenticity")),
         "ai_likelihood": clamp(data.get("ai_likelihood")),
         "rationale": str(data.get("rationale", ""))[:240],
     }
+    # Blended quality for backward-compatible composite scoring.
+    out["quality"] = round(
+        sum(QUALITY_WEIGHTS[a] * out[a] for a in RACE_AXES)
+    )
+    return out
 
 
 def _is_param_error(exc: Exception) -> bool:
@@ -275,12 +321,12 @@ def _make_judge(provider: str, api_key: str, model: str):
         ]
         locked: dict = {"params": None}
 
-        async def _call(extra: dict, commit: Commit, diff: str):
+        async def _call(extra: dict, commit: Commit, diff: str, evidence: str):
             resp = await client.chat.completions.create(
                 model=model,
                 messages=[
                     {"role": "system", "content": _SYSTEM},
-                    {"role": "user", "content": _build_prompt(commit, diff)},
+                    {"role": "user", "content": _build_prompt(commit, diff, evidence)},
                 ],
                 **extra,
             )
@@ -288,13 +334,13 @@ def _make_judge(provider: str, api_key: str, model: str):
             u = resp.usage
             return _normalize(data), (u.prompt_tokens, u.completion_tokens)
 
-        async def judge(commit: Commit, diff: str):
+        async def judge(commit: Commit, diff: str, evidence: str = ""):
             if locked["params"] is not None:
-                return await _call(locked["params"], commit, diff)
+                return await _call(locked["params"], commit, diff, evidence)
             last: Exception | None = None
             for extra in variants:
                 try:
-                    result = await _call(extra, commit, diff)
+                    result = await _call(extra, commit, diff, evidence)
                     locked["params"] = extra  # this variant works; reuse it
                     return result
                 except Exception as exc:  # param-rejection → try the next variant
@@ -310,15 +356,15 @@ def _make_judge(provider: str, api_key: str, model: str):
 
     client = AsyncAnthropic(api_key=api_key)
 
-    async def judge(commit: Commit, diff: str):
+    async def judge(commit: Commit, diff: str, evidence: str = ""):
         resp = await client.messages.create(
             model=model,
-            max_tokens=400,
+            max_tokens=600,
             system=_SYSTEM,
             messages=[
                 {
                     "role": "user",
-                    "content": _build_prompt(commit, diff)
+                    "content": _build_prompt(commit, diff, evidence)
                     + "\n\nReturn only the JSON object.",
                 }
             ],
@@ -477,14 +523,20 @@ async def judge_commits(
 
     async def worker(commit: Commit) -> None:
         async with sem:
+            # Diff + static analysis run together off the event loop.
             diff = await asyncio.to_thread(
                 git_service.get_commit_diff, repo_path, commit.hash, MAX_DIFF_CHARS
             )
+            analysis = await asyncio.to_thread(
+                static_analysis.analyze_commit, repo_path, commit
+            )
+            evidence = analysis.to_evidence()
+
             judgment: dict | None = None
             last_err: Exception | None = None
             for attempt in range(MAX_RETRIES + 1):
                 try:
-                    judgment, (itk, otk) = await judge(commit, diff)
+                    judgment, (itk, otk) = await judge(commit, diff, evidence)
                     totals.input_tokens += itk
                     totals.output_tokens += otk
                     totals.cost_usd = (
@@ -500,12 +552,14 @@ async def judge_commits(
             if judgment is None:
                 totals.errors += 1
                 judgment = {
-                    "quality": 50,
-                    "authenticity": 50,
+                    "readability": 50, "maintainability": 50, "correctness": 50,
+                    "efficiency": 50, "quality": 50, "authenticity": 50,
                     "ai_likelihood": 50,
                     "rationale": f"judge failed: {type(last_err).__name__}",
                     "error": True,
                 }
+            # Attach objective static-analysis summary alongside the judgment.
+            judgment["static"] = analysis.to_dict()
             totals.judged += 1
             totals.by_hash[commit.hash] = judgment
             on_progress(totals, commit, judgment)

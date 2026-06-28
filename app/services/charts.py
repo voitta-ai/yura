@@ -80,11 +80,21 @@ def hbar(
     return _svg(width, height, "".join(rows))
 
 
+# Palette for segmented-bar series, applied in key order.
+_SEG_COLORS = [NAVY, NAVY_SOFT, CYAN, "#5B8DB8", CYAN_SOFT]
+
+
 def grouped_score(items: list[dict], *, width: int = 640) -> str:
-    """Score breakdown: one row per dev, three thin segmented bars (V/C/Q)."""
+    """Score breakdown: one row per item, a thin segmented bar per value key.
+
+    Segments are derived from the first item's `values` keys, so this renders
+    both the composite breakdown (volume/consistency/quality) and the RACE
+    profile (readability/maintainability/correctness/efficiency).
+    """
     if not items:
         return _empty(width, 80)
-    seg = [("volume", NAVY), ("consistency", NAVY_SOFT), ("quality", CYAN)]
+    keys = list(items[0]["values"].keys())
+    seg = [(k, _SEG_COLORS[i % len(_SEG_COLORS)]) for i, k in enumerate(keys)]
     label_w, bar_h, gap, pad = 168, 9, 5, 10
     row_h = len(seg) * (bar_h + 3) + gap + 8
     plot_w = width - label_w - 48

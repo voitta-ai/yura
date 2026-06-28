@@ -119,13 +119,13 @@
   <div class="section-head__no">{{ "%02d"|format(ns.n) }}</div>
   <div class="section-head__txt">
     <h2>The model's verdict</h2>
-    <p class="section-head__intro">Each judged commit scored on craftsmanship and on whether it represents real, substantive work.</p>
+    <p class="section-head__intro">Each judged commit was scored on the four RACE quality dimensions — Readability, Maintainability, Correctness, Efficiency — grounded in objective static-analysis findings from the changed code, not the diff alone.</p>
   </div>
 </div>
 <div class="grid-2">
   <div class="exhibit">
-    <h3 class="exhibit__title">Commit quality by contributor.</h3>
-    <div class="exhibit__units">Mean quality, 0–100 (judged commits)</div>
+    <h3 class="exhibit__title">Blended commit quality by contributor.</h3>
+    <div class="exhibit__units">RACE-weighted quality, 0–100 (judged commits)</div>
     <div class="exhibit__chart">{{ exhibits.quality|safe }}</div>
   </div>
   <div class="exhibit">
@@ -136,6 +136,19 @@
 </div>
 {% if caps.quality %}<p class="caption">{{ caps.quality }}</p>{% endif %}
 {% if caps.authenticity %}<p class="caption">{{ caps.authenticity }}</p>{% endif %}
+
+{% if exhibits.race %}
+<div class="exhibit" style="margin-top:34px">
+  <h3 class="exhibit__title">RACE profile — the four quality dimensions, decomposed.</h3>
+  <div class="exhibit__units">Readability · Maintainability · Correctness · Efficiency, 0–100 (top 8 judged)</div>
+  <div class="exhibit__chart">{{ exhibits.race|safe }}</div>
+  {% if report.llm_totals and report.llm_totals.static_files %}
+  <p class="caption">Grounded in {{ report.llm_totals.static_files|intcomma }} statically-analyzed files
+    ({{ report.llm_totals.lint_findings|intcomma }} lint/complexity findings; peak cyclomatic complexity {{ report.llm_totals.max_ccn }}).
+    Maintainability and correctness scores are pulled down where the analyzer flags high complexity or bug-prone patterns.</p>
+  {% endif %}
+</div>
+{% endif %}
 
 <!-- ── Section: AI adoption ──────────────────────────────── -->
 {% set ns.n = ns.n + 1 %}
@@ -267,6 +280,13 @@
     at an estimated <strong>${{ "%.2f"|format(report.llm_meta.cost_usd) }}</strong>{% if report.llm_meta.errors %}
     ({{ report.llm_meta.errors }} commit{{ '' if report.llm_meta.errors == 1 else 's' }} failed to judge){% endif %}.
     Authenticity below 40 is flagged low-effort; AI-likelihood above 60 counts as AI-assisted.</p>
+  <p>Each commit is scored on the <strong>RACE</strong> dimensions (Readability, Maintainability,
+    Correctness, Efficiency; blended 25/30/30/15 into the quality figure). Scores are
+    <strong>grounded in static analysis</strong> of the changed files at each revision —
+    <strong>lizard</strong> for cyclomatic complexity, function length and parameter counts across
+    ~20 languages, and <strong>ruff</strong> for Python bug/security/style rules — so the model
+    judges against objective findings rather than the diff alone
+    (cf. arXiv 2508.14419; rubric design per arXiv 2512.20159).</p>
   {% endif %}
 </div>
 

@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>YURA — Code-Quality Assessment Improvement Plan</title>
+<style>
+  :root{
+    --navy:#051c2c; --navy2:#082d45; --cyan:#00a9f4; --ink:#1a1a1a;
+    --grey:#4d4d4d; --mute:#7a7a7a; --hair:#e6e6e6; --wash:#f7f8f9;
+    --good:#1a8c4a; --warn:#c98a00; --bad:#c0392b;
+    --serif:Georgia,"Times New Roman",serif; --sans:"Helvetica Neue",Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:var(--sans);color:var(--ink);background:var(--wash);line-height:1.55;font-size:15px}
+  .wrap{max-width:1000px;margin:0 auto;background:#fff;padding:0 0 70px;box-shadow:0 0 40px rgba(5,28,44,.06)}
+  header{background:var(--navy);color:#fff;padding:42px 48px 36px}
+  .kick{font-size:11px;letter-spacing:3px;text-transform:uppercase;color:var(--cyan);font-weight:700}
+  h1{font-family:var(--serif);font-size:34px;line-height:1.12;margin:12px 0 10px;font-weight:700}
+  header p{font-size:15px;color:#c4d2dc;max-width:680px;margin:0}
+  .body{padding:36px 48px 0}
+  h2{font-family:var(--serif);color:var(--navy);font-size:24px;margin:0 0 4px}
+  .lead{color:var(--grey);font-size:15px;margin:0 0 22px;max-width:760px}
+  .rule{height:2px;background:var(--navy);margin:46px 0 22px}
+
+  /* problem cards */
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:18px 0}
+  .gap{border:1px solid var(--hair);border-left:4px solid var(--bad);padding:14px 16px;background:#fff}
+  .gap h4{margin:0 0 5px;font-size:14px;color:var(--navy)}
+  .gap p{margin:0;font-size:12.5px;color:var(--grey)}
+  .gap .src{font-size:11px;color:var(--mute);margin-top:7px;font-style:italic}
+
+  /* phases */
+  .phase{border:1px solid var(--hair);border-top:3px solid var(--cyan);margin:18px 0;padding:0}
+  .phase__hd{display:flex;align-items:flex-start;gap:16px;padding:18px 20px 12px;border-bottom:1px solid var(--hair)}
+  .phase__no{font-family:var(--serif);font-size:30px;font-weight:700;color:var(--cyan);line-height:.85}
+  .phase__t{flex:1}
+  .phase__t h3{margin:0;font-size:18px;color:var(--navy);font-family:var(--serif)}
+  .phase__t .goal{font-size:13px;color:var(--grey);margin-top:3px}
+  .tags{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+  .tag{font-size:10px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;padding:3px 8px;border-radius:3px}
+  .tag--effort{background:#eef0f1;color:var(--grey)}
+  .tag--roi{background:#e6f6ee;color:var(--good)}
+  .tag--cost{background:#fff4e0;color:var(--warn)}
+  .phase__body{padding:14px 20px 18px}
+  .phase__body ul{margin:0 0 12px;padding-left:18px}
+  .phase__body li{font-size:13.5px;color:var(--ink);margin-bottom:5px}
+  .phase__body li code{background:var(--wash);padding:1px 5px;border-radius:3px;font-size:12px;color:var(--navy2)}
+  .ground{font-size:12px;color:var(--mute);border-left:3px solid var(--cyan);padding:6px 0 6px 12px;background:var(--wash)}
+  .ground b{color:var(--navy)}
+
+  table{width:100%;border-collapse:collapse;font-size:13px;margin:10px 0}
+  th{text-align:left;font-size:10px;letter-spacing:.7px;text-transform:uppercase;color:var(--mute);font-weight:700;padding:8px 10px;border-bottom:2px solid var(--navy)}
+  td{padding:9px 10px;border-bottom:1px solid var(--hair);vertical-align:top}
+  td .p{font-weight:700;color:var(--navy)}
+  .dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px}
+  .d-now{background:var(--cyan)} .d-next{background:var(--navy2)} .d-later{background:var(--mute)}
+
+  .decide{border:1px solid var(--hair);background:var(--wash);padding:16px 20px;margin:14px 0}
+  .decide h4{margin:0 0 4px;color:var(--navy);font-size:14px}
+  .decide p{margin:0;font-size:13px;color:var(--grey)}
+  .decide .opts{font-size:12.5px;color:var(--navy2);margin-top:6px}
+
+  .foot{padding:26px 48px 0;color:var(--mute);font-size:11.5px;border-top:1px solid var(--hair);margin-top:30px}
+  @media(max-width:720px){.grid{grid-template-columns:1fr}header,.body{padding-left:24px;padding-right:24px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <div class="kick">YURA · Engineering Proposal</div>
+  <h1>From vibe-score to evidence-grounded<br>code-quality assessment</h1>
+  <p>A phased plan to replace YURA's primitive quality heuristics with a multi-dimensional, statically-grounded, calibrated assessment — every change anchored in the 2024–2026 arXiv corpus (165 papers, indexed).</p>
+</header>
+
+<div class="body">
+
+  <h2>The problem we're fixing</h2>
+  <p class="lead">Today YURA judges quality two ways, both fragile. The corpus identifies exactly why each fails.</p>
+  <div class="grid">
+    <div class="gap">
+      <h4>Regex "shitty commit" heuristic</h4>
+      <p>Keyword match on commit messages + a one-line-touch rule. Catches lazy <em>messages</em>, says nothing about the <em>code</em>.</p>
+      <p class="src">analysis.py · _is_shitty()</p>
+    </div>
+    <div class="gap">
+      <h4>One-shot LLM judge, vague rubric</h4>
+      <p>Single pass scores 3 axes from a one-sentence prompt. AXIOM: this hallucinates flaws, can't tell a tweak from a refactor, and absolute-score agreement is low (MCC&lt;15).</p>
+      <p class="src">llm.py · _SCHEMA_HINT · 2512.20159</p>
+    </div>
+    <div class="gap">
+      <h4>Keyword "AI-likelihood"</h4>
+      <p>Regex for "copilot/claude/gpt". The corpus uses stylometry, embeddings (GraphCodeBERT, 94% F1), and perplexity. Ours is a toy by comparison.</p>
+      <p class="src">analysis.py · _AI_RE · 2604.16058, 2601.19264</p>
+    </div>
+    <div class="gap">
+      <h4>Git history ignored</h4>
+      <p>We parse churn &amp; diffs but use none of it for risk. JIT defect prediction (churn→defect density, DeepJIT) is the most YURA-native signal we're leaving on the table.</p>
+      <p class="src">2605.17548, 2605.30208 (Meta RADAR)</p>
+    </div>
+  </div>
+
+  <div class="rule"></div>
+  <h2>The plan — five phases</h2>
+  <p class="lead">Sequenced by leverage. Phases 1–2 attack the hallucination problem head-on and need no new infrastructure. Each phase ships independently and improves the report on its own.</p>
+
+  <!-- PHASE 1 -->
+  <div class="phase">
+    <div class="phase__hd">
+      <div class="phase__no">01</div>
+      <div class="phase__t">
+        <h3>RACE rubric — explicit, anchored dimensions</h3>
+        <div class="goal">Replace the one-sentence rubric with gradeable per-axis criteria.</div>
+        <div class="tags"><span class="tag tag--effort">Effort: S</span><span class="tag tag--roi">ROI: Highest</span></div>
+      </div>
+    </div>
+    <div class="phase__body">
+      <ul>
+        <li>Score four established axes — <b>R</b>eadability, m<b>A</b>intainability, <b>C</b>orrectness, <b>E</b>fficiency — plus authenticity, each with concrete anchors ("0–20: no error handling at boundaries; 80–100: …").</li>
+        <li>Prompt-only change in <code>llm.py</code>; widen the JSON schema &amp; <code>_normalize()</code>; surface the axes in the report exhibits.</li>
+        <li>Keep scores <b>pointwise with a reference anchor</b> — the reliability papers show this minimizes verbosity/position bias.</li>
+      </ul>
+      <div class="ground"><b>Grounding:</b> RACE benchmark (2508.14419, 2603.25146), ISO 25010; anchoring &amp; pointwise from 2606.01629, 2605.28710.</div>
+    </div>
+  </div>
+
+  <!-- PHASE 2 -->
+  <div class="phase">
+    <div class="phase__hd">
+      <div class="phase__no">02</div>
+      <div class="phase__t">
+        <h3>Static-analysis grounding</h3>
+        <div class="goal">Feed objective tool findings into the judge as evidence — stop guessing from the diff alone.</div>
+        <div class="tags"><span class="tag tag--effort">Effort: M</span><span class="tag tag--roi">ROI: High</span></div>
+      </div>
+    </div>
+    <div class="phase__body">
+      <ul>
+        <li>Run <code>pylint</code> + <code>bandit</code> (Python) / <code>eslint</code> (JS) on changed files at the touched revision; map findings → RACE axes (Pylint convention→readability, error→correctness, refactor→maintainability; Bandit→security).</li>
+        <li>Inject the findings into the judge prompt so scores are <b>anchored to real issues</b>, not hallucinated ones.</li>
+        <li>New <code>services/static_analysis.py</code>; language-detection by extension; graceful skip for unsupported languages.</li>
+      </ul>
+      <div class="ground"><b>Grounding:</b> "Static Analysis as a Feedback Loop" (2508.14419) — deterministic tool→dimension mapping; BitsAI-CR (2501.15134).</div>
+    </div>
+  </div>
+
+  <!-- PHASE 3 -->
+  <div class="phase">
+    <div class="phase__hd">
+      <div class="phase__no">03</div>
+      <div class="phase__t">
+        <h3>Git-native risk signals</h3>
+        <div class="goal">Turn data we already parse into a per-commit defect-risk score.</div>
+        <div class="tags"><span class="tag tag--effort">Effort: M</span><span class="tag tag--roi">ROI: High · YURA-unique</span></div>
+      </div>
+    </div>
+    <div class="phase__body">
+      <ul>
+        <li>Compute Just-In-Time risk features per commit: relative churn, files touched, diff dispersion, message↔diff alignment, hotspot recency.</li>
+        <li>Combine into a <b>Diff Risk Score</b> shown per contributor and used to weight the watch-list — a cheap, non-LLM signal that works even in free git-stats mode.</li>
+        <li>Extends <code>analysis.py</code>; no API cost.</li>
+      </ul>
+      <div class="ground"><b>Grounding:</b> churn→defect density (Nagappan &amp; Ball); DeepJIT/CC2Vec, JITLine via 2605.17548; Meta Diff Risk Score (2605.30208).</div>
+    </div>
+  </div>
+
+  <!-- PHASE 4 -->
+  <div class="phase">
+    <div class="phase__hd">
+      <div class="phase__no">04</div>
+      <div class="phase__t">
+        <h3>Real AI-code detection</h3>
+        <div class="goal">Replace the keyword regex with research-grade signals.</div>
+        <div class="tags"><span class="tag tag--effort">Effort: M–L</span><span class="tag tag--cost">Choice needed</span></div>
+      </div>
+    </div>
+    <div class="phase__body">
+      <ul>
+        <li><b>Tier 1 (cheap, ship first):</b> feature-based stylometry — whitespace ratios, identifier conventions, structural-complexity regularity. No model, runs locally.</li>
+        <li><b>Tier 2 (optional):</b> embedding classifier (GraphCodeBERT, LLMSniffer-style) or perplexity/burstiness — higher accuracy, adds a dependency/model.</li>
+      </ul>
+      <div class="ground"><b>Grounding:</b> "Whitespaces Don't Lie" (2601.19264), LLMSniffer (2604.16058), CodeVision (2501.03288), DetectGPT-style perplexity.</div>
+    </div>
+  </div>
+
+  <!-- PHASE 5 -->
+  <div class="phase">
+    <div class="phase__hd">
+      <div class="phase__no">05</div>
+      <div class="phase__t">
+        <h3>Judge reliability &amp; cost control</h3>
+        <div class="goal">Make scores trustworthy and cheap at scale.</div>
+        <div class="tags"><span class="tag tag--effort">Effort: M</span><span class="tag tag--cost">Cost-sensitive</span></div>
+      </div>
+    </div>
+    <div class="phase__body">
+      <ul>
+        <li><b>Two-pass triage:</b> deterministic rules resolve clear-cut commits (~70%); the LLM only adjudicates the ambiguous ~30% — large cost reduction (BitsAI-CR).</li>
+        <li><b>Bias mitigation:</b> blind the author, control for length, optionally repeat/aggregate; favor <b>precision over recall</b> (false positives erode trust).</li>
+        <li><b>Optional panel:</b> vendor-diverse multi-judge with consensus + a reliability stat for high-stakes runs.</li>
+      </ul>
+      <div class="ground"><b>Grounding:</b> two-pass &amp; precision (2501.15134, 2412.18531); bias (2606.22329, 2605.25273); panels (2605.20351).</div>
+    </div>
+  </div>
+
+  <div class="rule"></div>
+  <h2>Sequencing &amp; effort</h2>
+  <table>
+    <thead><tr><th>Phase</th><th>Effort</th><th>API cost impact</th><th>Ships</th><th>Depends on</th></tr></thead>
+    <tbody>
+      <tr><td><span class="dot d-now"></span><span class="p">1 · RACE rubric</span></td><td>Small</td><td>Neutral</td><td>Now</td><td>—</td></tr>
+      <tr><td><span class="dot d-now"></span><span class="p">2 · Static grounding</span></td><td>Medium</td><td>↓ (fewer retries)</td><td>Now</td><td>1</td></tr>
+      <tr><td><span class="dot d-next"></span><span class="p">3 · Git risk signals</span></td><td>Medium</td><td>Zero (no LLM)</td><td>Next</td><td>—</td></tr>
+      <tr><td><span class="dot d-next"></span><span class="p">4 · AI detection (T1)</span></td><td>Medium</td><td>Zero (local)</td><td>Next</td><td>—</td></tr>
+      <tr><td><span class="dot d-later"></span><span class="p">5 · Reliability/2-pass</span></td><td>Medium</td><td>↓↓ (~70% fewer calls)</td><td>Later</td><td>1,2</td></tr>
+    </tbody>
+  </table>
+
+  <div class="rule"></div>
+  <h2>Decisions I need from you</h2>
+
+  <div class="decide">
+    <h4>1 · Scope of first cut</h4>
+    <p>Recommend shipping <b>Phases 1 + 2 together</b> — the rubric rewrite plus static grounding is the combination AXIOM says fixes hallucinated scores, and it needs only <code>pylint</code>/<code>bandit</code> subprocess calls.</p>
+    <div class="opts">Options: (a) 1+2 together [recommended] · (b) 1 only, evaluate, then 2 · (c) different order</div>
+  </div>
+  <div class="decide">
+    <h4>2 · Language coverage for static analysis</h4>
+    <p>Pylint/Bandit are Python-only. Your test repos (chainlit, click) are Python, but real targets are mixed.</p>
+    <div class="opts">Options: (a) Python first, add eslint/others later [recommended] · (b) multi-language from day one · (c) language-agnostic LLM-only grounding</div>
+  </div>
+  <div class="decide">
+    <h4>3 · AI-detection depth (Phase 4)</h4>
+    <p>Tier-1 stylometry is free and local. Tier-2 (GraphCodeBERT embeddings) is materially more accurate but adds a model dependency + load time.</p>
+    <div class="opts">Options: (a) Tier-1 only for now [recommended] · (b) Tier-1 now, Tier-2 behind a flag · (c) go straight to Tier-2</div>
+  </div>
+  <div class="decide">
+    <h4>4 · Multi-judge panel (Phase 5)</h4>
+    <p>A vendor-diverse panel improves reliability but multiplies cost per commit. Worth it only for high-stakes reviews.</p>
+    <div class="opts">Options: (a) single judge + two-pass triage [recommended] · (b) optional panel toggle in Settings · (c) skip panels entirely</div>
+  </div>
+
+  <div class="foot">
+    Plan grounded in the indexed corpus "LLM Code Quality Assessment Arxiv" (165 papers, 2024–2026).
+    Paper IDs cited inline. No project code changed to produce this plan — it lives in <code>arxiv/improvement-plan.html</code>.
+  </div>
+</div>
+</div>
+</body>
+</html>

@@ -266,14 +266,29 @@ def apply_llm_scores(
         js = per_dev.get(d["email"], [])
         if js:
             n = len(js)
-            avg_q = sum(j["quality"] for j in js) / n
-            avg_auth = sum(j["authenticity"] for j in js) / n
-            avg_ai = sum(j["ai_likelihood"] for j in js) / n
+
+            def _avg(key: str, default: float = 0.0) -> float:
+                vals = [j[key] for j in js if key in j]
+                return sum(vals) / len(vals) if vals else default
+
+            avg_q = _avg("quality")
+            avg_auth = _avg("authenticity")
+            avg_ai = _avg("ai_likelihood")
             d["llm"] = {
                 "judged": n,
                 "avg_quality": round(avg_q, 1),
                 "avg_authenticity": round(avg_auth, 1),
                 "avg_ai_likelihood": round(avg_ai, 1),
+                # RACE sub-dimensions (present on non-error judgments).
+                "avg_readability": round(_avg("readability"), 1),
+                "avg_maintainability": round(_avg("maintainability"), 1),
+                "avg_correctness": round(_avg("correctness"), 1),
+                "avg_efficiency": round(_avg("efficiency"), 1),
+                # Objective static-analysis rollup.
+                "max_ccn": max((j.get("static", {}).get("max_ccn", 0) for j in js), default=0),
+                "lint_findings": sum(
+                    j.get("static", {}).get("n_findings", 0) for j in js
+                ),
                 "fake_commits": sum(
                     1 for j in js if j["authenticity"] < FAKE_AUTHENTICITY
                 ),
@@ -310,6 +325,7 @@ def apply_llm_scores(
         c = hash_meta.get(h)
         if c is None:
             continue
+        static = j.get("static", {})
         enriched.append(
             {
                 "hash": h[:8],
@@ -318,6 +334,8 @@ def apply_llm_scores(
                 "quality": j["quality"],
                 "authenticity": j["authenticity"],
                 "ai_likelihood": j["ai_likelihood"],
+                "max_ccn": static.get("max_ccn", 0),
+                "lint_findings": static.get("n_findings", 0),
                 "rationale": j.get("rationale", ""),
             }
         )
@@ -327,25 +345,31 @@ def apply_llm_scores(
     report["ai_commits"] = sorted(
         enriched, key=lambda e: e["ai_likelihood"], reverse=True
     )[:8]
+    n = len(judgments) or 1
+    all_j = list(judgments.values())
+
+    def _javg(key: str) -> float:
+        vals = [j[key] for j in all_j if key in j]
+        return round(sum(vals) / len(vals), 1) if vals else 0
+
     report["llm_totals"] = {
         "judged": len(judgments),
         "fake": sum(1 for e in enriched if e["authenticity"] < FAKE_AUTHENTICITY),
         "ai": sum(1 for e in enriched if e["ai_likelihood"] > AI_LIKELIHOOD),
-        "avg_quality": round(
-            sum(e["quality"] for e in enriched) / len(enriched), 1
-        )
-        if enriched
-        else 0,
-        "avg_authenticity": round(
-            sum(e["authenticity"] for e in enriched) / len(enriched), 1
-        )
-        if enriched
-        else 0,
-        "avg_ai_likelihood": round(
-            sum(e["ai_likelihood"] for e in enriched) / len(enriched), 1
-        )
-        if enriched
-        else 0,
+        "avg_quality": _javg("quality"),
+        "avg_authenticity": _javg("authenticity"),
+        "avg_ai_likelihood": _javg("ai_likelihood"),
+        "avg_readability": _javg("readability"),
+        "avg_maintainability": _javg("maintainability"),
+        "avg_correctness": _javg("correctness"),
+        "avg_efficiency": _javg("efficiency"),
+        # Objective static-analysis rollup across all judged commits.
+        "static_files": sum(j.get("static", {}).get("files_analyzed", 0) for j in all_j),
+        "lint_findings": sum(j.get("static", {}).get("n_findings", 0) for j in all_j),
+        "max_ccn": max((j.get("static", {}).get("max_ccn", 0) for j in all_j), default=0),
+        "high_complexity_commits": sum(
+            1 for j in all_j if j.get("static", {}).get("max_ccn", 0) > 15
+        ),
     }
     _narrate(report)  # refresh story + captions now that LLM data is present
 
