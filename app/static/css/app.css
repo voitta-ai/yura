@@ -264,6 +264,48 @@ input:focus, select:focus { outline: none; border-color: var(--cyan);
 .caption { font-size:13px; line-height:1.55; color:var(--grey); margin:16px 0 0;
   border-left:3px solid var(--cyan); padding:2px 0 2px 13px; max-width:760px; }
 
+/* headline gauges */
+.gauges { display:grid; grid-template-columns:repeat(auto-fit, minmax(160px, 1fr));
+  gap:10px; margin:24px 0; }
+.gauge { display:flex; justify-content:center; border:1px solid var(--hair);
+  padding:8px; background:#fff; }
+.gauge svg { max-width:200px; }
+
+/* tab navigation */
+.tabs { display:flex; gap:2px; margin:30px 0 0; border-bottom:2px solid var(--navy);
+  position:sticky; top:0; background:var(--paper); z-index:20; overflow-x:auto;
+  scrollbar-width:none; }
+.tabs::-webkit-scrollbar { display:none; }
+.tab { border:0; background:none; cursor:pointer; font-family:var(--sans);
+  font-size:12.5px; font-weight:700; letter-spacing:.6px; text-transform:uppercase;
+  color:var(--mute); padding:13px 18px; white-space:nowrap; border-bottom:3px solid transparent;
+  margin-bottom:-2px; transition:color .15s; }
+.tab:hover { color:var(--navy); }
+.tab.is-active { color:var(--navy); border-bottom-color:var(--cyan); }
+.pane { display:none; animation:fadein .25s ease; }
+.pane.is-active { display:block; }
+@keyframes fadein { from { opacity:0; transform:translateY(4px); } to { opacity:1; transform:none; } }
+.pane-intro { margin:34px 0 18px; border-top:2px solid var(--navy); padding-top:16px; }
+.pane-intro h2 { margin:0; font-size:23px; }
+.pane-intro p { font-size:14px; color:var(--grey); margin:6px 0 0; max-width:720px; line-height:1.5; }
+.exhibit__kicker { font-size:11px; letter-spacing:1.6px; text-transform:uppercase;
+  color:var(--cyan); font-weight:700; margin-bottom:6px; }
+.exhibit__lead { font-size:13px; color:var(--grey); margin:0 0 14px; max-width:680px; }
+
+/* confidence badges */
+.conf { font-size:10px; font-weight:700; letter-spacing:.4px; text-transform:uppercase;
+  padding:2px 7px; border-radius:3px; }
+.conf--high { background:#e6f6ee; color:var(--good); }
+.conf--medium { background:#fff4e0; color:var(--warn); }
+.conf--low { background:#fbeae8; color:var(--bad); }
+
+/* limitations list */
+.limits { list-style:none; padding:0; margin:8px 0 0; }
+.limits li { font-size:12.5px; line-height:1.55; color:var(--grey); padding:7px 0 7px 16px;
+  border-top:1px solid var(--hair); position:relative; }
+.limits li:before { content:"—"; position:absolute; left:0; color:var(--cyan); }
+.limits b { color:var(--navy); }
+
 /* hero quality matrix */
 .exhibit--hero { border:1px solid var(--hair); border-top:3px solid var(--cyan);
   padding:20px 22px; background:#fff; }

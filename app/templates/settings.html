@@ -78,6 +78,24 @@ existing value.</p>
     <div class="hint">Caps how many commits are sent to the LLM in a single analysis (cost ceiling).</div>
   </div>
 
+  <hr class="rule">
+  <h3>Judge panel <span class="hint" style="font-weight:400">— reliability, opt-in</span></h3>
+  <div class="field">
+    <label for="judge_panel">Multi-judge panel</label>
+    <select id="judge_panel" name="judge_panel">
+      <option value="off" {% if values.judge_panel != "on" %}selected{% endif %}>Off — single judge (default)</option>
+      <option value="on" {% if values.judge_panel == "on" %}selected{% endif %}>On — average several models per commit</option>
+    </select>
+    <div class="hint">Reduces single-model bias and reports inter-judge agreement. <strong>Multiplies cost</strong> by the number of models.</div>
+  </div>
+  <div class="field">
+    <label for="panel_models">Panel models</label>
+    <input type="text" id="panel_models" name="panel_models"
+           value="{{ values.panel_models }}"
+           placeholder="openai:gpt-4o, anthropic:claude-haiku-4-5">
+    <div class="hint">Comma-separated <code>provider:model</code> (≥2). Each provider needs its API key set above.</div>
+  </div>
+
   <button class="btn" type="submit">Save settings</button>
 </form>
 

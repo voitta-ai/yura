@@ -125,6 +125,7 @@ def analyze(commits: list[Commit]) -> dict:
             }
         )
 
+    _deterministic_signals(non_merge, by_email, devs)
     _score(devs)
     devs.sort(key=lambda d: d["score"], reverse=True)
     for i, d in enumerate(devs, 1):
@@ -144,6 +145,128 @@ def analyze(commits: list[Commit]) -> dict:
     }
     _narrate(report)
     return report
+
+
+# Test-file detection across languages (path-based, deterministic).
+_TEST_RE = re.compile(
+    r"(^|/)tests?/|(^|/)__tests__/|(^|/)spec/|"
+    r"(^|/)test_[^/]+|[^/]+_test\.[a-z]+$|"
+    r"\.test\.[a-z]+$|\.spec\.[a-z]+$|_spec\.[a-z]+$|Test[A-Z][^/]*\.[a-z]+$",
+    re.IGNORECASE,
+)
+# Commit subjects claiming a *trivial* change — used for msg↔diff alignment.
+_TRIVIAL_INTENT_RE = re.compile(
+    r"\b(typo|nit|minor|small|tiny|tweak|whitespace|format|formatting|fmt|"
+    r"lint|comment|comments|rename|cleanup|chore|bump|version)\b",
+    re.IGNORECASE,
+)
+
+
+def _is_test_path(path: str) -> bool:
+    return bool(_TEST_RE.search(path))
+
+
+def _stdev(xs: list[float]) -> float:
+    if len(xs) < 2:
+        return 0.0
+    mean = sum(xs) / len(xs)
+    return (sum((x - mean) ** 2 for x in xs) / (len(xs) - 1)) ** 0.5
+
+
+def _confidence_tier(n: int) -> str:
+    """Confidence in a dev's scores given how many of their commits were judged."""
+    if n >= 10:
+        return "high"
+    if n >= 4:
+        return "medium"
+    return "low"
+
+
+def _avg_static_ai(js: list[dict]) -> float | None:
+    """Average deterministic stylometry AI-score across a dev's judged commits."""
+    vals = [
+        j["static"]["ai_stylometry"]
+        for j in js
+        if j.get("static", {}).get("ai_stylometry") is not None
+    ]
+    return round(sum(vals) / len(vals), 1) if vals else None
+
+
+def _commit_alignment(c: Commit) -> int:
+    """0–100: does the commit message match the size/shape of the change?
+
+    Deterministic, both modes. Penalizes 'trivial intent' messages on large
+    diffs (a gaming/sloppiness signal — cf. SEVRA) and empty messages on real
+    changes; rewards messages that name a touched path. Neutral by default.
+    """
+    churn = c.insertions + c.deletions
+    score = 80
+    subject = c.subject.strip()
+    if not subject:
+        return 25 if churn > 5 else 60
+    if _TRIVIAL_INTENT_RE.search(subject) and churn > 80:
+        score -= 35  # "minor tweak" that rewrites 80+ lines — misaligned
+    if len(subject) < 12 and churn > 200:
+        score -= 20  # terse message, sprawling change
+    if c.files_changed > 20 and len(subject) < 25:
+        score -= 10  # huge blast radius, one-liner message
+    # Reward: message references an actually-changed file/dir stem.
+    stems = {
+        s.lower()
+        for p in c.files
+        for s in (p.replace("\\", "/").split("/")[-1].split(".")[0],)
+        if len(s) > 3
+    }
+    if stems and any(s in subject.lower() for s in stems):
+        score += 12
+    return max(0, min(100, score))
+
+
+def _deterministic_signals(
+    non_merge: list[Commit],
+    by_email: dict[str, list[Commit]],
+    devs: list[dict],
+) -> None:
+    """Per-dev deterministic signals available in BOTH local and LLM modes:
+    test-touch rate, a just-in-time Diff Risk Score, and msg↔diff alignment.
+    """
+    # Hotspot map: how often each file is touched across the whole history.
+    touch_counts: dict[str, int] = defaultdict(int)
+    for c in non_merge:
+        for p in c.files:
+            touch_counts[p] += 1
+    max_touch = max(touch_counts.values(), default=1)
+    max_churn_commit = max((c.insertions + c.deletions for c in non_merge), default=1) or 1
+
+    def commit_risk(c: Commit) -> int:
+        churn = c.insertions + c.deletions
+        # Three JIT-style components (Nagappan&Ball churn, dispersion, hotspots).
+        churn_r = _norm(churn, 0, max_churn_commit) ** 0.5  # sqrt: compress tail
+        disp_r = _norm(c.files_changed, 0, 25)
+        hotspot_r = _norm(
+            max((touch_counts.get(p, 0) for p in c.files), default=0), 0, max_touch
+        )
+        align_pen = (100 - _commit_alignment(c)) / 100.0
+        risk = (
+            0.4 * churn_r + 0.25 * disp_r + 0.2 * hotspot_r + 0.15 * align_pen
+        )
+        return round(risk * 100)
+
+    by_dev_email = {d["email"]: d for d in devs}
+    for email, cs in by_email.items():
+        d = by_dev_email.get(email)
+        if not d:
+            continue
+        n = len(cs)
+        test_commits = sum(1 for c in cs if any(_is_test_path(p) for p in c.files))
+        risks = [commit_risk(c) for c in cs]
+        aligns = [_commit_alignment(c) for c in cs]
+        d["tests_touched"] = test_commits
+        d["test_ratio"] = round(test_commits / n, 3) if n else 0
+        d["avg_risk"] = round(sum(risks) / n, 1) if risks else 0
+        d["high_risk_commits"] = sum(1 for r in risks if r >= 60)
+        d["avg_alignment"] = round(sum(aligns) / n, 1) if aligns else 0
+        d["low_alignment_commits"] = sum(1 for a in aligns if a < 50)
 
 
 def _score(devs: list[dict]) -> None:
@@ -233,6 +356,15 @@ def _build_totals(
         "churn": sum(d["churn"] for d in devs),
         "files_changed": sum(d["files_changed"] for d in devs),
         "shitty_commits": sum(d["shitty_commits"] for d in devs),
+        # Deterministic git signals (both modes).
+        "tests_touched": sum(d.get("tests_touched", 0) for d in devs),
+        "test_commit_pct": round(
+            sum(d.get("tests_touched", 0) for d in devs) / len(non_merge) * 100
+        )
+        if non_merge
+        else 0,
+        "high_risk_commits": sum(d.get("high_risk_commits", 0) for d in devs),
+        "low_alignment_commits": sum(d.get("low_alignment_commits", 0) for d in devs),
         "first_date": dt.datetime.utcfromtimestamp(first).strftime("%Y-%m-%d")
         if first
         else "—",
@@ -274,6 +406,12 @@ def apply_llm_scores(
             avg_q = _avg("quality")
             avg_auth = _avg("authenticity")
             avg_ai = _avg("ai_likelihood")
+            quals = [j["quality"] for j in js if "quality" in j]
+            # Deterministic per-commit security finding counts (from static).
+            sec_findings = sum(
+                j.get("static", {}).get("dim_counts", {}).get("security", 0)
+                for j in js
+            )
             d["llm"] = {
                 "judged": n,
                 "avg_quality": round(avg_q, 1),
@@ -284,6 +422,11 @@ def apply_llm_scores(
                 "avg_maintainability": round(_avg("maintainability"), 1),
                 "avg_correctness": round(_avg("correctness"), 1),
                 "avg_efficiency": round(_avg("efficiency"), 1),
+                # Security: LLM axis (if present) + deterministic finding count.
+                "avg_security": round(_avg("security", 70), 1),
+                "security_findings": sec_findings,
+                # Deterministic AI-likelihood (stylometry, model-free).
+                "avg_ai_stylometry": _avg_static_ai(js),
                 # Objective static-analysis rollup.
                 "max_ccn": max((j.get("static", {}).get("max_ccn", 0) for j in js), default=0),
                 "lint_findings": sum(
@@ -293,6 +436,9 @@ def apply_llm_scores(
                     1 for j in js if j["authenticity"] < FAKE_AUTHENTICITY
                 ),
                 "ai_commits": sum(1 for j in js if j["ai_likelihood"] > AI_LIKELIHOOD),
+                # Confidence: dispersion of quality + sample-size tier.
+                "quality_stdev": round(_stdev(quals), 1),
+                "confidence": _confidence_tier(n),
             }
             # Model-judged quality: craftsmanship weighted with authenticity.
             ai_quality = (0.6 * avg_q + 0.4 * avg_auth) / 100.0
@@ -369,6 +515,33 @@ def apply_llm_scores(
         "max_ccn": max((j.get("static", {}).get("max_ccn", 0) for j in all_j), default=0),
         "high_complexity_commits": sum(
             1 for j in all_j if j.get("static", {}).get("max_ccn", 0) > 15
+        ),
+        # Security (RACES) + deterministic findings.
+        "avg_security": _javg("security"),
+        "security_findings": sum(
+            j.get("static", {}).get("dim_counts", {}).get("security", 0)
+            for j in all_j
+        ),
+        # Deterministic stylometry average (model-free AI signal).
+        "avg_ai_stylometry": (
+            round(
+                sum(
+                    j["static"]["ai_stylometry"]
+                    for j in all_j
+                    if j.get("static", {}).get("ai_stylometry") is not None
+                )
+                / max(
+                    1,
+                    sum(
+                        1
+                        for j in all_j
+                        if j.get("static", {}).get("ai_stylometry") is not None
+                    ),
+                ),
+                1,
+            )
+            if any(j.get("static", {}).get("ai_stylometry") is not None for j in all_j)
+            else None
         ),
     }
     _narrate(report)  # refresh story + captions now that LLM data is present

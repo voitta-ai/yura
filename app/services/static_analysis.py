@@ -67,6 +67,7 @@ class CommitAnalysis:
     languages: list[str] = field(default_factory=list)
     max_ccn: int = 0
     avg_ccn: float = 0.0
+    ai_stylometry: int | None = None  # deterministic AI-likelihood, 0-100
     complex_functions: list[str] = field(default_factory=list)  # "name (ccn N)"
     findings: list[Finding] = field(default_factory=list)
     available: bool = True  # False only if nothing could be analyzed
@@ -118,6 +119,7 @@ class CommitAnalysis:
             "complex_functions": self.complex_functions[:10],
             "dim_counts": self.dim_counts(),
             "n_findings": len(self.findings),
+            "ai_stylometry": self.ai_stylometry,
         }
 
 
@@ -175,8 +177,25 @@ def analyze_commit(repo_path: Path, commit: Commit) -> CommitAnalysis:
             _run_lizard(local, analysis)
         if _HAS_RUFF:
             _run_ruff(tmp_dir, local, analysis)
+        _run_stylometry(local, analysis)
 
     return analysis
+
+
+def _run_stylometry(
+    local: list[tuple[str, Path]], analysis: CommitAnalysis
+) -> None:
+    """Deterministic AI-likelihood from the already-materialized files."""
+    from app.services import ai_detect
+
+    pairs = []
+    for rel, dest in local:
+        try:
+            pairs.append((rel, dest.read_text(encoding="utf-8", errors="replace")))
+        except OSError:
+            continue
+    result = ai_detect.score_files(pairs)
+    analysis.ai_stylometry = result["ai_score"]
 
 
 def _lang_for(path: str) -> str:

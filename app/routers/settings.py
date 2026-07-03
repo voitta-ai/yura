@@ -58,6 +58,8 @@ def save_settings(
     anthropic_model: str = Form("claude-opus-4-8"),
     openai_model: str = Form("gpt-4o"),
     max_commits_per_run: str = Form("300"),
+    judge_panel: str = Form("off"),
+    panel_models: str = Form(""),
 ):
     current = store.get_all(db)
     # Empty secret field => keep existing key (don't clobber with blank).
@@ -66,6 +68,8 @@ def save_settings(
         "anthropic_model": anthropic_model,
         "openai_model": openai_model,
         "max_commits_per_run": max_commits_per_run,
+        "judge_panel": "on" if judge_panel == "on" else "off",
+        "panel_models": panel_models.strip(),
         "anthropic_api_key": anthropic_api_key or current["anthropic_api_key"],
         "openai_api_key": openai_api_key or current["openai_api_key"],
     }

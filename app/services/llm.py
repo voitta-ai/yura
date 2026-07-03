@@ -76,13 +76,18 @@ _SCHEMA_HINT = (
     "(Down-weight when static analysis flags bug-prone patterns.)\n"
     "- efficiency: no obvious wasteful work, redundant passes, or pathological "
     "patterns; reasonable data structures. Use 70 as neutral when not assessable.\n"
+    "- security: no introduced vulnerabilities, unsafe calls, injection, secrets, "
+    "or missing input validation. Lower when static analysis reports security "
+    "findings. Use 80 as neutral when the change has no security surface.\n"
     "- authenticity: 100 for substantive real engineering; low for trivial, "
     "padding, whitespace-only, auto-generated, or fake busy-work commits.\n"
     "- ai_likelihood: how likely the code was AI-generated, from style cues.\n"
+    "Judge the CODE, not the commit message — a flattering message must not raise "
+    "the score if the diff does not support it.\n"
     'Return JSON exactly like: {"readability": <int>, "maintainability": <int>, '
-    '"correctness": <int>, "efficiency": <int>, "authenticity": <int>, '
-    '"ai_likelihood": <int>, "rationale": "<one concise sentence citing the '
-    'most important evidence>"}.'
+    '"correctness": <int>, "efficiency": <int>, "security": <int>, '
+    '"authenticity": <int>, "ai_likelihood": <int>, "rationale": "<one concise '
+    'sentence citing the most important evidence>"}.'
 )
 
 
@@ -258,6 +263,7 @@ def _normalize(data: dict) -> dict:
         "maintainability": clamp(data.get("maintainability")),
         "correctness": clamp(data.get("correctness")),
         "efficiency": clamp(data.get("efficiency"), default=70),
+        "security": clamp(data.get("security"), default=80),
         "authenticity": clamp(data.get("authenticity")),
         "ai_likelihood": clamp(data.get("ai_likelihood")),
         "rationale": str(data.get("rationale", ""))[:240],
@@ -505,6 +511,63 @@ async def synthesize_narrative(
 
 ProgressCB = Callable[[JudgeTotals, Commit, dict | None], None]
 
+# Numeric axes that get averaged across panel judges.
+_PANEL_AXES = (
+    "readability", "maintainability", "correctness", "efficiency",
+    "security", "authenticity", "ai_likelihood", "quality",
+)
+
+
+def _make_composite_judge(specs: list[dict]):
+    """Panel judge: run N models per commit, average axes, report agreement.
+
+    `specs`: [{provider, api_key, model}]. Returns a judge(commit, diff,
+    evidence) coroutine that returns (merged_judgment, (in_tokens, out_tokens)).
+    """
+    judges = [(s, _make_judge(s["provider"], s["api_key"], s["model"])) for s in specs]
+
+    async def judge(commit: Commit, diff: str, evidence: str = ""):
+        results = await asyncio.gather(
+            *(j(commit, diff, evidence) for _s, j in judges),
+            return_exceptions=True,
+        )
+        verdicts, itk, otk, per_model, cost_delta = [], 0, 0, [], 0.0
+        for (s, _j), r in zip(judges, results):
+            if isinstance(r, Exception):
+                continue
+            data, (i, o) = r
+            verdicts.append(data)
+            itk += i
+            otk += o
+            # Cost is summed per-model at each model's own price (panel models
+            # can differ in price by >60x, so a blended price is inaccurate).
+            ip, op = price_for(s["model"])
+            cost_delta += i / 1e6 * ip + o / 1e6 * op
+            per_model.append({"model": s["model"], "quality": data["quality"]})
+        if not verdicts:
+            raise RuntimeError("all panel judges failed")
+        merged = dict(verdicts[0])
+        for axis in _PANEL_AXES:
+            vals = [v[axis] for v in verdicts if axis in v]
+            if vals:
+                merged[axis] = round(sum(vals) / len(vals))
+        # Agreement: 100 minus the spread of quality scores across judges.
+        quals = [v["quality"] for v in verdicts]
+        spread = (
+            (sum((q - sum(quals) / len(quals)) ** 2 for q in quals) / len(quals)) ** 0.5
+            if len(quals) > 1
+            else 0.0
+        )
+        merged["panel"] = {
+            "n_judges": len(verdicts),
+            "per_model": per_model,
+            "agreement": round(max(0.0, 100 - spread), 1),
+            "cost_delta": round(cost_delta, 6),  # accurate per-model cost
+        }
+        return merged, (itk, otk)
+
+    return judge
+
 
 async def judge_commits(
     commits: list[Commit],
@@ -514,10 +577,21 @@ async def judge_commits(
     model: str,
     on_progress: ProgressCB,
     concurrency: int = CONCURRENCY,
+    panel: list[dict] | None = None,
 ) -> JudgeTotals:
-    """Judge every commit in `commits` concurrently; fire on_progress per result."""
-    judge = _make_judge(provider, api_key, model)
-    in_price, out_price = price_for(model)
+    """Judge every commit in `commits` concurrently; fire on_progress per result.
+
+    If `panel` (≥2 specs) is given, each commit is judged by every model and the
+    scores are averaged, with an inter-judge agreement stat attached.
+    """
+    if panel and len(panel) >= 2:
+        judge = _make_composite_judge(panel)
+        prices = [price_for(s["model"]) for s in panel]
+        in_price = sum(p[0] for p in prices) / len(prices)
+        out_price = sum(p[1] for p in prices) / len(prices)
+    else:
+        judge = _make_judge(provider, api_key, model)
+        in_price, out_price = price_for(model)
     sem = asyncio.Semaphore(concurrency)
     totals = JudgeTotals()
 
@@ -539,10 +613,15 @@ async def judge_commits(
                     judgment, (itk, otk) = await judge(commit, diff, evidence)
                     totals.input_tokens += itk
                     totals.output_tokens += otk
-                    totals.cost_usd = (
-                        totals.input_tokens / 1e6 * in_price
-                        + totals.output_tokens / 1e6 * out_price
-                    )
+                    panel_info = judgment.get("panel") if isinstance(judgment, dict) else None
+                    if panel_info and "cost_delta" in panel_info:
+                        # Panel: accurate per-model cost accumulated by the judge.
+                        totals.cost_usd += panel_info.pop("cost_delta")
+                    else:
+                        totals.cost_usd = (
+                            totals.input_tokens / 1e6 * in_price
+                            + totals.output_tokens / 1e6 * out_price
+                        )
                     break
                 except Exception as exc:  # transient API / parse error
                     last_err = exc
@@ -553,8 +632,8 @@ async def judge_commits(
                 totals.errors += 1
                 judgment = {
                     "readability": 50, "maintainability": 50, "correctness": 50,
-                    "efficiency": 50, "quality": 50, "authenticity": 50,
-                    "ai_likelihood": 50,
+                    "efficiency": 50, "security": 80, "quality": 50,
+                    "authenticity": 50, "ai_likelihood": 50,
                     "rationale": f"judge failed: {type(last_err).__name__}",
                     "error": True,
                 }

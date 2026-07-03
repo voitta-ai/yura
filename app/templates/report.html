@@ -3,9 +3,10 @@
 {% set devs = report.developers %}
 {% set story = report.story or {} %}
 {% set caps = report.captions or {} %}
+{% set lt = report.llm_totals or {} %}
+{% set meta = report.llm_meta or {} %}
 {% set leader = devs[0] if devs else None %}
 {% set llm = report.mode == "llm" %}
-{% set ns = namespace(n=0) %}
 {% block title %}{{ repo.name }} — Developer Performance Review{% endblock %}
 {% block content %}
 
@@ -17,8 +18,9 @@
     A commit-grounded assessment of {{ t.developers }} contributor{{ '' if t.developers == 1 else 's' }}
     across {{ t.commits|intcomma }} commits, {{ t.first_date }} → {{ t.last_date }}
     ({{ t.span_days|intcomma }} days).
-    {% if llm and report.llm_meta %}Every sampled commit was independently reviewed by
-    {{ report.llm_meta.provider }}&nbsp;/&nbsp;{{ report.llm_meta.model }}.{% endif %}
+    {% if llm and meta %}Every sampled commit independently reviewed by
+    {% if meta.panel_models %}a {{ meta.panel_models|length }}-model panel{% else %}{{ meta.provider }}&nbsp;/&nbsp;{{ meta.model }}{% endif %},
+    grounded in multi-language static analysis.{% endif %}
   </p>
 </div>
 
@@ -26,16 +28,21 @@
 {% if story.headline %}
 <section class="exec">
   <div class="exec__label">Executive summary
-    {% if story.by_llm and report.llm_meta %}<span class="exec__byline">· written by {{ report.llm_meta.model }}</span>{% endif %}
+    {% if story.by_llm and meta %}<span class="exec__byline">· written by {{ meta.model }}</span>{% endif %}
   </div>
   <h2 class="exec__headline">{{ story.headline }}</h2>
   {% if story.narrative %}<p class="exec__narr">{{ story.narrative }}</p>{% endif %}
   {% if story.findings %}
-  <ul class="findings">
-    {% for f in story.findings %}<li>{{ f }}</li>{% endfor %}
-  </ul>
+  <ul class="findings">{% for f in story.findings %}<li>{{ f }}</li>{% endfor %}</ul>
   {% endif %}
 </section>
+{% endif %}
+
+<!-- ── Headline gauges (gravitas) ────────────────────────── -->
+{% if exhibits.gauges %}
+<div class="gauges">
+  {% for g in exhibits.gauges %}<div class="gauge">{{ g|safe }}</div>{% endfor %}
+</div>
 {% endif %}
 
 <!-- ── At a glance ───────────────────────────────────────── -->
@@ -43,344 +50,364 @@
   <div class="kpi"><div class="kpi__num">{{ t.developers }}</div><div class="kpi__lbl">Contributors</div></div>
   <div class="kpi"><div class="kpi__num">{{ t.commits|intcomma }}</div><div class="kpi__lbl">Commits</div></div>
   <div class="kpi"><div class="kpi__num">{{ (t.churn / 1000)|round(1) }}<span class="u">k</span></div><div class="kpi__lbl">Lines changed</div></div>
-  {% if llm and report.llm_totals %}
-  <div class="kpi"><div class="kpi__num">{{ report.llm_totals.avg_quality }}</div><div class="kpi__lbl">Avg quality</div></div>
-  <div class="kpi"><div class="kpi__num">{{ report.llm_totals.avg_authenticity }}</div><div class="kpi__lbl">Avg authenticity</div></div>
-  <div class="kpi"><div class="kpi__num">{{ report.llm_totals.fake }}</div><div class="kpi__lbl">Flagged low-effort</div></div>
+  <div class="kpi"><div class="kpi__num">{{ t.test_commit_pct|default(0) }}<span class="u">%</span></div><div class="kpi__lbl">Commits w/ tests</div></div>
+  {% if llm and lt %}
+  <div class="kpi"><div class="kpi__num">{{ lt.fake|default(0) }}</div><div class="kpi__lbl">Flagged low-effort</div></div>
+  <div class="kpi"><div class="kpi__num">{{ lt.security_findings|default(0)|intcomma }}</div><div class="kpi__lbl">Security findings</div></div>
   {% else %}
-  <div class="kpi"><div class="kpi__num">{{ t.files_changed|intcomma }}</div><div class="kpi__lbl">File touches</div></div>
-  <div class="kpi"><div class="kpi__num">{{ t.shitty_commits|intcomma }}</div><div class="kpi__lbl">Low-effort commits</div></div>
+  <div class="kpi"><div class="kpi__num">{{ t.high_risk_commits|default(0) }}</div><div class="kpi__lbl">High-risk commits</div></div>
+  <div class="kpi"><div class="kpi__num">{{ t.low_alignment_commits|default(0) }}</div><div class="kpi__lbl">Msg↔diff mismatches</div></div>
   {% endif %}
 </div>
 
-{% if exhibits.matrix %}
-<!-- ── Hero: the performance landscape ───────────────────── -->
-{% set ns.n = ns.n + 1 %}
-<div class="section-head">
-  <div class="section-head__no">{{ "%02d"|format(ns.n) }}</div>
-  <div class="section-head__txt">
-    <h2>The performance landscape</h2>
-    <p class="section-head__intro">Every judged contributor placed by <strong>how much</strong> they ship (horizontal) against <strong>how well</strong> the model judges it (vertical). Bubble size is code volume. The dashed crosshair is the team median — splitting the field into four archetypes.</p>
-  </div>
-</div>
-<div class="exhibit exhibit--hero">
-  <div class="exhibit__chart">{{ exhibits.matrix|safe }}</div>
-  <div class="quad-key">
-    <span><b>Stars</b> — high output, high quality</span>
-    <span><b>Craftspeople</b> — fewer commits, excellent quality</span>
-    <span><b>Workhorses</b> — high output, quality to watch</span>
-    <span><b>Watch</b> — low on both axes</span>
-  </div>
-</div>
-{% endif %}
+<!-- ── Tab navigation ────────────────────────────────────── -->
+<nav class="tabs" id="tabs">
+  <button class="tab is-active" data-tab="overview">Overview</button>
+  {% if llm %}<button class="tab" data-tab="quality">Quality</button>{% endif %}
+  <button class="tab" data-tab="output">Output &amp; cadence</button>
+  <button class="tab" data-tab="integrity">Integrity &amp; risk</button>
+  <button class="tab" data-tab="scorecard">Scorecard</button>
+  <button class="tab" data-tab="method">Methodology</button>
+</nav>
 
-<!-- ── Section: The ranking ──────────────────────────────── -->
-{% set ns.n = ns.n + 1 %}
-<div class="section-head">
-  <div class="section-head__no">{{ "%02d"|format(ns.n) }}</div>
-  <div class="section-head__txt">
-    <h2>The ranking</h2>
-    <p class="section-head__intro">Where every contributor lands on the blended composite score, highest first.</p>
+<!-- ══ OVERVIEW ══════════════════════════════════════════ -->
+<section class="pane is-active" data-pane="overview">
+  {% if exhibits.matrix %}
+  <div class="exhibit exhibit--hero">
+    <div class="exhibit__kicker">The performance landscape</div>
+    <h3 class="exhibit__title">How much each contributor ships, against how well.</h3>
+    <p class="exhibit__lead">Horizontal = output (commits, log). Vertical = model-judged quality. Bubble = code volume. Dashed crosshair = team median.</p>
+    <div class="exhibit__chart">{{ exhibits.matrix|safe }}</div>
+    <div class="quad-key">
+      <span><b>Stars</b> — high output, high quality</span>
+      <span><b>Craftspeople</b> — fewer commits, excellent quality</span>
+      <span><b>Workhorses</b> — high output, quality to watch</span>
+      <span><b>Watch</b> — low on both axes</span>
+    </div>
   </div>
-</div>
-<div class="exhibit">
-  <div class="exhibit__units">Composite score, 0–100 · weighted: volume {{ (report.weights.volume*100)|int }}% · consistency {{ (report.weights.consistency*100)|int }}% · quality {{ (report.weights.quality*100)|int }}%{% if report.weights.ai_quality %} · model-judged quality {{ (report.weights.ai_quality*100)|int }}%{% endif %}</div>
-  <div class="exhibit__chart">{{ exhibits.ranking|safe }}</div>
-  {% if caps.ranking %}<p class="caption">{{ caps.ranking }}</p>{% endif %}
-</div>
+  {% endif %}
 
-<!-- ── Section: Anatomy of the score ─────────────────────── -->
-{% set ns.n = ns.n + 1 %}
-<div class="section-head">
-  <div class="section-head__no">{{ "%02d"|format(ns.n) }}</div>
-  <div class="section-head__txt">
-    <h2>Anatomy of the score</h2>
-    <p class="section-head__intro">The composite decomposes into independent dimensions — a high total can hide a weak one.</p>
-  </div>
-</div>
-<div class="exhibit">
-  <div class="exhibit__units">Sub-scores, 0–100, per contributor (top 8)</div>
-  <div class="exhibit__chart">{{ exhibits.breakdown|safe }}</div>
-  {% if caps.breakdown %}<p class="caption">{{ caps.breakdown }}</p>{% endif %}
-</div>
-
-<!-- ── Section: Output & cadence ─────────────────────────── -->
-{% set ns.n = ns.n + 1 %}
-<div class="section-head">
-  <div class="section-head__no">{{ "%02d"|format(ns.n) }}</div>
-  <div class="section-head__txt">
-    <h2>Output &amp; cadence</h2>
-    <p class="section-head__intro">Raw productivity — commit counts, code churn, and how activity flowed over time.</p>
-  </div>
-</div>
-<div class="grid-2">
   <div class="exhibit">
-    <h3 class="exhibit__title">Commit volume by contributor.</h3>
-    <div class="exhibit__units">Non-merge commits</div>
-    <div class="exhibit__chart">{{ exhibits.commits|safe }}</div>
+    <h3 class="exhibit__title">The ranking.</h3>
+    <div class="exhibit__units">Composite score, 0–100 · volume {{ (report.weights.volume*100)|int }}% · consistency {{ (report.weights.consistency*100)|int }}% · quality {{ (report.weights.quality*100)|int }}%{% if report.weights.ai_quality %} · model-judged quality {{ (report.weights.ai_quality*100)|int }}%{% endif %}</div>
+    <div class="exhibit__chart">{{ exhibits.ranking|safe }}</div>
+    {% if caps.ranking %}<p class="caption">{{ caps.ranking }}</p>{% endif %}
   </div>
+
   <div class="exhibit">
-    <h3 class="exhibit__title">Code churn tells a different story.</h3>
-    <div class="exhibit__units">Lines changed (insertions + deletions)</div>
-    <div class="exhibit__chart">{{ exhibits.churn|safe }}</div>
+    <h3 class="exhibit__title">Anatomy of the score.</h3>
+    <div class="exhibit__units">Sub-scores, 0–100, per contributor (top 8) — a high total can hide a weak dimension</div>
+    <div class="exhibit__chart">{{ exhibits.breakdown|safe }}</div>
+    {% if caps.breakdown %}<p class="caption">{{ caps.breakdown }}</p>{% endif %}
   </div>
-</div>
-{% if caps.output %}<p class="caption">{{ caps.output }}</p>{% endif %}
-<div class="exhibit" style="margin-top:34px">
-  <h3 class="exhibit__title">Team commit cadence over time.</h3>
-  <div class="exhibit__units">Commits per month</div>
-  <div class="exhibit__chart">{{ exhibits.timeline|safe }}</div>
-  {% if caps.cadence %}<p class="caption">{{ caps.cadence }}</p>{% endif %}
-</div>
+</section>
 
-{% if exhibits.consistency %}
-<div class="exhibit exhibit--hero" style="margin-top:34px">
-  <h3 class="exhibit__title">Consistency landscape — sustained effort vs bursts.</h3>
-  <div class="exhibit__units">Active days (x) × commits (y, log) · bubble = code churn</div>
-  <div class="exhibit__chart">{{ exhibits.consistency|safe }}</div>
-  <div class="quad-key">
-    <span><b>Sustained</b> — many active days, high volume</span>
-    <span><b>Burst</b> — high volume in few days</span>
-    <span><b>Steady trickle</b> — present often, ships little</span>
-    <span><b>Occasional</b> — low on both</span>
-  </div>
-</div>
-{% endif %}
-
-{% if exhibits.build_refactor %}
-<div class="exhibit exhibit--hero" style="margin-top:34px">
-  <h3 class="exhibit__title">Builders vs refactorers — what kind of change.</h3>
-  <div class="exhibit__units">Lines inserted (x, log) × lines deleted (y, log) · bubble = commits</div>
-  <div class="exhibit__chart">{{ exhibits.build_refactor|safe }}</div>
-  <div class="quad-key">
-    <span><b>Builders</b> — add far more than they remove</span>
-    <span><b>Refactorers</b> — delete more than they add</span>
-    <span><b>Churners</b> — heavy add <em>and</em> delete</span>
-    <span><b>Light touch</b> — small footprint either way</span>
-  </div>
-</div>
-{% endif %}
-
+<!-- ══ QUALITY (llm only) ════════════════════════════════ -->
 {% if llm %}
-<!-- ── Section: The model's verdict ──────────────────────── -->
-{% set ns.n = ns.n + 1 %}
-<div class="section-head">
-  <div class="section-head__no">{{ "%02d"|format(ns.n) }}</div>
-  <div class="section-head__txt">
+<section class="pane" data-pane="quality">
+  <div class="pane-intro">
     <h2>The model's verdict</h2>
-    <p class="section-head__intro">Each judged commit was scored on the four RACE quality dimensions — Readability, Maintainability, Correctness, Efficiency — grounded in objective static-analysis findings from the changed code, not the diff alone.</p>
+    <p>Each judged commit scored on the <strong>RACES</strong> dimensions — Readability, mAintainability, Correctness, Efficiency, Security — grounded in objective static-analysis findings from the changed code, not the diff alone.</p>
   </div>
-</div>
-<div class="grid-2">
-  <div class="exhibit">
-    <h3 class="exhibit__title">Blended commit quality by contributor.</h3>
-    <div class="exhibit__units">RACE-weighted quality, 0–100 (judged commits)</div>
-    <div class="exhibit__chart">{{ exhibits.quality|safe }}</div>
+  <div class="grid-2">
+    <div class="exhibit">
+      <h3 class="exhibit__title">Blended commit quality.</h3>
+      <div class="exhibit__units">RACE-weighted quality, 0–100 (judged commits)</div>
+      <div class="exhibit__chart">{{ exhibits.quality|safe }}</div>
+    </div>
+    <div class="exhibit">
+      <h3 class="exhibit__title">Authenticity: who ships real work.</h3>
+      <div class="exhibit__units">Mean authenticity, 0–100 — low = trivial / padding</div>
+      <div class="exhibit__chart">{{ exhibits.authenticity|safe }}</div>
+    </div>
   </div>
-  <div class="exhibit">
-    <h3 class="exhibit__title">Authenticity: who ships real work.</h3>
-    <div class="exhibit__units">Mean authenticity, 0–100 — low = trivial / padding</div>
-    <div class="exhibit__chart">{{ exhibits.authenticity|safe }}</div>
-  </div>
-</div>
-{% if caps.quality %}<p class="caption">{{ caps.quality }}</p>{% endif %}
-{% if caps.authenticity %}<p class="caption">{{ caps.authenticity }}</p>{% endif %}
+  {% if caps.quality %}<p class="caption">{{ caps.quality }}</p>{% endif %}
 
-{% if exhibits.surgical %}
-<div class="exhibit exhibit--hero" style="margin-top:34px">
-  <h3 class="exhibit__title">Surgical vs bulk — does focus pay off?</h3>
-  <div class="exhibit__units">Churn per commit (x, log) × model-judged quality (y) · bubble = commits</div>
-  <div class="exhibit__chart">{{ exhibits.surgical|safe }}</div>
-  <div class="quad-key">
-    <span><b>Surgical</b> — small, tightly-scoped, high quality</span>
-    <span><b>Bulk, polished</b> — large commits that still score well</span>
-    <span><b>Sprawl</b> — large commits, quality to watch</span>
-    <span><b>Trivial</b> — small and low-scoring</span>
+  {% if exhibits.security %}
+  <div class="exhibit" style="margin-top:34px">
+    <h3 class="exhibit__title">Security — the fifth dimension.</h3>
+    <div class="exhibit__units">Mean security score, 0–100 · lower where the analyzer flags unsafe patterns ({{ lt.security_findings|default(0)|intcomma }} findings)</div>
+    <div class="exhibit__chart">{{ exhibits.security|safe }}</div>
   </div>
-</div>
-{% endif %}
-
-{% if exhibits.radars %}
-<div class="exhibit" style="margin-top:34px">
-  <h3 class="exhibit__title">RACE fingerprints — every contributor has a shape.</h3>
-  <div class="exhibit__units">Readability · Maintainability · Correctness · Efficiency, 0–100 (top judged)</div>
-  <div class="radar-grid">
-    {% for r in exhibits.radars %}
-    <div class="radar-cell">{{ r.svg|safe }}</div>
-    {% endfor %}
-  </div>
-  {% if report.llm_totals and report.llm_totals.static_files %}
-  <p class="caption">Grounded in {{ report.llm_totals.static_files|intcomma }} statically-analyzed files
-    ({{ report.llm_totals.lint_findings|intcomma }} lint/complexity findings; peak cyclomatic complexity {{ report.llm_totals.max_ccn }}).
-    Maintainability and correctness are pulled down where the analyzer flags high complexity or bug-prone patterns.</p>
   {% endif %}
-</div>
-{% endif %}
 
-{% if exhibits.race %}
-<div class="exhibit" style="margin-top:34px">
-  <h3 class="exhibit__title">RACE profile — the four dimensions, side by side.</h3>
-  <div class="exhibit__units">Readability · Maintainability · Correctness · Efficiency, 0–100 (top 8 judged)</div>
-  <div class="exhibit__chart">{{ exhibits.race|safe }}</div>
-</div>
-{% endif %}
-
-<!-- ── Section: AI adoption ──────────────────────────────── -->
-{% set ns.n = ns.n + 1 %}
-<div class="section-head">
-  <div class="section-head__no">{{ "%02d"|format(ns.n) }}</div>
-  <div class="section-head__txt">
-    <h2>AI adoption</h2>
-    <p class="section-head__intro">How much each contributor's code carries the stylistic fingerprints of AI generation.</p>
+  {% if exhibits.radars %}
+  <div class="exhibit" style="margin-top:34px">
+    <h3 class="exhibit__title">RACE fingerprints — every contributor has a shape.</h3>
+    <div class="exhibit__units">Readability · Maintainability · Correctness · Efficiency, 0–100</div>
+    <div class="radar-grid">
+      {% for r in exhibits.radars %}<div class="radar-cell">{{ r.svg|safe }}</div>{% endfor %}
+    </div>
+    {% if lt.static_files %}
+    <p class="caption">Grounded in {{ lt.static_files|intcomma }} statically-analyzed files
+      ({{ lt.lint_findings|intcomma }} lint/complexity findings; peak cyclomatic complexity {{ lt.max_ccn }}).</p>
+    {% endif %}
   </div>
-</div>
-<div class="exhibit">
-  <div class="exhibit__units">Mean AI-likelihood, 0–100, from diff style cues</div>
-  <div class="exhibit__chart">{{ exhibits.ai_usage|safe }}</div>
-  {% if caps.ai %}<p class="caption">{{ caps.ai }}</p>{% endif %}
-</div>
+  {% endif %}
 
-{% if exhibits.auth_ai %}
-<div class="exhibit exhibit--hero" style="margin-top:34px">
-  <h3 class="exhibit__title">Is the AI-assisted code actually real?</h3>
-  <div class="exhibit__units">AI-likelihood (x) × authenticity (y) · bubble = commits</div>
-  <div class="exhibit__chart">{{ exhibits.auth_ai|safe }}</div>
-  <div class="quad-key">
-    <span><b>Genuine craft</b> — low AI signal, high authenticity</span>
-    <span><b>AI-assisted, real</b> — AI-flavored but substantive</span>
-    <span><b>AI slop</b> — AI-flavored and low authenticity</span>
-    <span><b>Human padding</b> — low AI signal, still trivial</span>
+  {% if exhibits.surgical %}
+  <div class="exhibit exhibit--hero" style="margin-top:34px">
+    <h3 class="exhibit__title">Surgical vs bulk — does focus pay off?</h3>
+    <div class="exhibit__units">Churn per commit (x, log) × model-judged quality (y) · bubble = commits</div>
+    <div class="exhibit__chart">{{ exhibits.surgical|safe }}</div>
+    <div class="quad-key">
+      <span><b>Surgical</b> — small, tightly-scoped, high quality</span>
+      <span><b>Bulk, polished</b> — large commits that still score well</span>
+      <span><b>Sprawl</b> — large commits, quality to watch</span>
+      <span><b>Trivial</b> — small and low-scoring</span>
+    </div>
   </div>
-</div>
+  {% endif %}
+</section>
 {% endif %}
 
-{% if report.flagged_commits %}
-<!-- ── Section: Watch list ───────────────────────────────── -->
-{% set ns.n = ns.n + 1 %}
-<div class="section-head">
-  <div class="section-head__no">{{ "%02d"|format(ns.n) }}</div>
-  <div class="section-head__txt">
-    <h2>Watch list</h2>
-    <p class="section-head__intro">The commits the model found least convincing — flagged for a human look.</p>
+<!-- ══ OUTPUT & CADENCE ══════════════════════════════════ -->
+<section class="pane" data-pane="output">
+  <div class="pane-intro">
+    <h2>Output &amp; cadence</h2>
+    <p>Raw productivity — commit counts, code churn, how activity flowed over time, and the shape of each contributor's effort.</p>
   </div>
-</div>
-<div class="exhibit">
-  <div class="exhibit__chart">
-  <table class="tbl">
-    <thead><tr>
-      <th class="l">Commit</th><th class="l">Author</th><th class="l">Subject</th>
-      <th>Qual</th><th>Real</th><th>AI</th><th class="l">Why the model flagged it</th>
-    </tr></thead>
-    <tbody>
-      {% for c in report.flagged_commits %}
-      <tr>
-        <td class="l mono">{{ c.hash }}</td>
-        <td class="l">{{ c.author }}</td>
-        <td class="l">{{ c.subject }}</td>
-        <td>{{ c.quality }}</td>
-        <td>{{ c.authenticity }}</td>
-        <td>{{ c.ai_likelihood }}</td>
-        <td class="l email">{{ c.rationale }}</td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
+  <div class="grid-2">
+    <div class="exhibit">
+      <h3 class="exhibit__title">Commit volume.</h3>
+      <div class="exhibit__units">Non-merge commits</div>
+      <div class="exhibit__chart">{{ exhibits.commits|safe }}</div>
+    </div>
+    <div class="exhibit">
+      <h3 class="exhibit__title">Code churn tells a different story.</h3>
+      <div class="exhibit__units">Lines changed (insertions + deletions)</div>
+      <div class="exhibit__chart">{{ exhibits.churn|safe }}</div>
+    </div>
   </div>
-  {% if caps.watchlist %}<p class="caption">{{ caps.watchlist }}</p>{% endif %}
-</div>
-{% endif %}
-{% endif %}
+  {% if caps.output %}<p class="caption">{{ caps.output }}</p>{% endif %}
 
-<!-- ── Section: Full scorecard ───────────────────────────── -->
-{% set ns.n = ns.n + 1 %}
-<div class="section-head">
-  <div class="section-head__no">{{ "%02d"|format(ns.n) }}</div>
-  <div class="section-head__txt">
+  <div class="exhibit" style="margin-top:34px">
+    <h3 class="exhibit__title">Team commit cadence over time.</h3>
+    <div class="exhibit__units">Commits per month</div>
+    <div class="exhibit__chart">{{ exhibits.timeline|safe }}</div>
+    {% if caps.cadence %}<p class="caption">{{ caps.cadence }}</p>{% endif %}
+  </div>
+
+  {% if exhibits.consistency %}
+  <div class="exhibit exhibit--hero" style="margin-top:34px">
+    <h3 class="exhibit__title">Consistency landscape — sustained effort vs bursts.</h3>
+    <div class="exhibit__units">Active days (x) × commits (y, log) · bubble = churn</div>
+    <div class="exhibit__chart">{{ exhibits.consistency|safe }}</div>
+    <div class="quad-key">
+      <span><b>Sustained</b> — many active days, high volume</span>
+      <span><b>Burst</b> — high volume in few days</span>
+      <span><b>Steady trickle</b> — present often, ships little</span>
+      <span><b>Occasional</b> — low on both</span>
+    </div>
+  </div>
+  {% endif %}
+
+  {% if exhibits.build_refactor %}
+  <div class="exhibit exhibit--hero" style="margin-top:34px">
+    <h3 class="exhibit__title">Builders vs refactorers.</h3>
+    <div class="exhibit__units">Lines inserted (x, log) × lines deleted (y, log) · bubble = commits</div>
+    <div class="exhibit__chart">{{ exhibits.build_refactor|safe }}</div>
+    <div class="quad-key">
+      <span><b>Builders</b> — add far more than they remove</span>
+      <span><b>Refactorers</b> — delete more than they add</span>
+      <span><b>Churners</b> — heavy add <em>and</em> delete</span>
+      <span><b>Light touch</b> — small footprint either way</span>
+    </div>
+  </div>
+  {% endif %}
+</section>
+
+<!-- ══ INTEGRITY & RISK ══════════════════════════════════ -->
+<section class="pane" data-pane="integrity">
+  <div class="pane-intro">
+    <h2>Integrity &amp; risk</h2>
+    <p>Signals that aren't about volume: where the change is risky, whether it ships tests, whether the message matches the diff, and how AI-flavored the code looks.</p>
+  </div>
+
+  {% if exhibits.risk %}
+  <div class="grid-2">
+    <div class="exhibit">
+      <h3 class="exhibit__title">Diff Risk Score by contributor.</h3>
+      <div class="exhibit__units">Mean just-in-time risk, 0–100 (churn · dispersion · hotspots · alignment)</div>
+      <div class="exhibit__chart">{{ exhibits.risk|safe }}</div>
+    </div>
+    <div class="exhibit">
+      <h3 class="exhibit__title">Who ships tests.</h3>
+      <div class="exhibit__units">Share of commits that touch test files</div>
+      <div class="exhibit__chart">{{ exhibits.tests|safe }}</div>
+    </div>
+  </div>
+  <p class="caption">Diff Risk is deterministic (no LLM) — relative churn, file dispersion, change hotspots, and message↔diff alignment, after Nagappan &amp; Ball / JIT defect-prediction literature. {{ t.low_alignment_commits|default(0) }} commits had a message that didn't match the size of the change.</p>
+  {% endif %}
+
+  {% if llm %}
+  <div class="exhibit" style="margin-top:34px">
+    <h3 class="exhibit__title">AI adoption signal.</h3>
+    <div class="exhibit__units">Mean AI-likelihood, 0–100</div>
+    <div class="exhibit__chart">{{ exhibits.ai_usage|safe }}</div>
+    {% if caps.ai %}<p class="caption">{{ caps.ai }}</p>{% endif %}
+  </div>
+
+  {% if exhibits.ai_compare %}
+  <div class="exhibit" style="margin-top:34px">
+    <h3 class="exhibit__title">Two independent AI signals, side by side.</h3>
+    <div class="exhibit__units">Deterministic stylometry vs the model's own guess, 0–100 — agreement builds confidence</div>
+    <div class="exhibit__chart">{{ exhibits.ai_compare|safe }}</div>
+    <p class="caption">Stylometry is model-free (whitespace, indentation regularity, comment density, naming consistency — "Whitespaces Don't Lie", 2601.19264), so it can't be gamed by the same model that wrote the code. Where the two disagree sharply, treat the AI call as low-confidence.</p>
+  </div>
+  {% endif %}
+
+  {% if exhibits.auth_ai %}
+  <div class="exhibit exhibit--hero" style="margin-top:34px">
+    <h3 class="exhibit__title">Is the AI-assisted code actually real?</h3>
+    <div class="exhibit__units">AI-likelihood (x) × authenticity (y) · bubble = commits</div>
+    <div class="exhibit__chart">{{ exhibits.auth_ai|safe }}</div>
+    <div class="quad-key">
+      <span><b>Genuine craft</b> — low AI signal, high authenticity</span>
+      <span><b>AI-assisted, real</b> — AI-flavored but substantive</span>
+      <span><b>AI slop</b> — AI-flavored and low authenticity</span>
+      <span><b>Human padding</b> — low AI signal, still trivial</span>
+    </div>
+  </div>
+  {% endif %}
+
+  {% if report.flagged_commits %}
+  <div class="exhibit" style="margin-top:34px">
+    <h3 class="exhibit__title">Watch list — commits flagged for a human look.</h3>
+    <div class="exhibit__units">The model's least-convincing commits, by authenticity</div>
+    <div class="exhibit__chart">
+    <table class="tbl">
+      <thead><tr>
+        <th class="l">Commit</th><th class="l">Author</th><th class="l">Subject</th>
+        <th>Qual</th><th>Real</th><th>AI</th><th class="l">Why flagged</th>
+      </tr></thead>
+      <tbody>
+        {% for c in report.flagged_commits %}
+        <tr>
+          <td class="l mono">{{ c.hash }}</td>
+          <td class="l">{{ c.author }}</td>
+          <td class="l">{{ c.subject }}</td>
+          <td>{{ c.quality }}</td>
+          <td>{{ c.authenticity }}</td>
+          <td>{{ c.ai_likelihood }}</td>
+          <td class="l email">{{ c.rationale }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    </div>
+  </div>
+  {% endif %}
+  {% endif %}{# /llm integrity #}
+</section>
+
+<!-- ══ SCORECARD ═════════════════════════════════════════ -->
+<section class="pane" data-pane="scorecard">
+  <div class="pane-intro">
     <h2>Full scorecard</h2>
-    <p class="section-head__intro">Every contributor, every metric, ranked by composite score.</p>
+    <p>Every contributor, every metric, ranked by composite score. The
+      <span class="conf conf--low">●</span> badge marks ranks based on few judged commits — read those with caution.</p>
   </div>
-</div>
-<div class="exhibit">
-  <div class="exhibit__chart">
-  <table class="tbl">
-    <thead>
-      <tr>
-        <th class="l">#</th>
-        <th class="l">Contributor</th>
-        <th>Score</th>
-        <th>Commits</th>
-        <th>Churn</th>
-        <th>Net</th>
-        <th>Files</th>
-        <th>Active days</th>
-        {% if llm %}
-        <th>Quality</th><th>Authentic</th><th>AI-lkhd</th><th>Fake</th>
-        {% else %}
-        <th>Low-effort</th><th>AI signals</th>
-        {% endif %}
-      </tr>
-    </thead>
-    <tbody>
-      {% for d in devs %}
-      <tr class="{{ 'top' if loop.first }}">
-        <td class="l rank">{{ d.rank }}</td>
-        <td class="l"><div class="name">{{ d.name }}</div><div class="email">{{ d.email }}</div></td>
-        <td class="score"><span class="scorebar" style="width: {{ (d.score * 0.6)|round }}px"></span> {{ d.score }}</td>
-        <td>{{ d.commits|intcomma }}</td>
-        <td>{{ d.churn|intcomma }}</td>
-        <td>{{ d.net|intcomma }}</td>
-        <td>{{ d.files_changed|intcomma }}</td>
-        <td>{{ d.active_days }}</td>
-        {% if llm %}
-          {% if d.llm and d.llm.judged %}
-        <td class="score">{{ d.llm.avg_quality }}</td>
-        <td>{{ d.llm.avg_authenticity }}</td>
-        <td>{{ d.llm.avg_ai_likelihood }}</td>
-        <td>{{ d.llm.fake_commits }} <span class="email">/ {{ d.llm.judged }}</span></td>
+  <div class="exhibit">
+    <div class="exhibit__chart">
+    <table class="tbl">
+      <thead>
+        <tr>
+          <th class="l">#</th><th class="l">Contributor</th><th>Score</th>
+          <th>Commits</th><th>Churn</th><th>Tests</th><th>Risk</th>
+          {% if llm %}<th>Quality</th><th>Sec</th><th>Authentic</th><th>AI</th><th>Conf.</th>
+          {% else %}<th>Align</th><th>Low-effort</th>{% endif %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for d in devs %}
+        <tr class="{{ 'top' if loop.first }}">
+          <td class="l rank">{{ d.rank }}</td>
+          <td class="l"><div class="name">{{ d.name }}</div><div class="email">{{ d.email }}</div></td>
+          <td class="score"><span class="scorebar" style="width: {{ (d.score * 0.6)|round }}px"></span> {{ d.score }}</td>
+          <td>{{ d.commits|intcomma }}</td>
+          <td>{{ d.churn|intcomma }}</td>
+          <td>{{ (d.test_ratio|default(0)*100)|round }}<span class="email">%</span></td>
+          <td>{{ d.avg_risk|default(0) }}</td>
+          {% if llm %}
+            {% if d.llm and d.llm.judged %}
+          <td class="score">{{ d.llm.avg_quality }}</td>
+          <td>{{ d.llm.avg_security|default('—') }}</td>
+          <td>{{ d.llm.avg_authenticity }}</td>
+          <td>{{ d.llm.avg_ai_likelihood }}</td>
+          <td><span class="conf conf--{{ d.llm.confidence|default('low') }}">{{ d.llm.confidence|default('—') }}</span></td>
+            {% else %}<td class="email" colspan="5">not sampled</td>{% endif %}
           {% else %}
-        <td class="email" colspan="4">not sampled</td>
+          <td>{{ d.avg_alignment|default(0) }}</td>
+          <td>{{ d.shitty_commits }} <span class="email">({{ (d.shitty_ratio*100)|round }}%)</span></td>
           {% endif %}
-        {% else %}
-        <td>{{ d.shitty_commits }} <span class="email">({{ (d.shitty_ratio*100)|round }}%)</span></td>
-        <td>{{ d.ai_signal_commits }}</td>
-        {% endif %}
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    </div>
   </div>
-</div>
+</section>
 
-<!-- ── Methodology ───────────────────────────────────────── -->
-<div class="method">
-  <h3>Methodology</h3>
-  <p>The composite score blends
-    <strong>volume</strong> (commit count + code churn),
-    <strong>consistency</strong> (active days and cadence over tenure), and
-    <strong>quality</strong> (commit-message discipline and low-effort ratio){% if llm %}, plus
-    <strong>model-judged quality</strong> (craftsmanship and authenticity, weighted 60/40){% endif %}.
-    Scores are shrunk toward zero for small samples (a credibility factor of
-    commits ÷ (commits + 8)) so a single drive-by commit can't out-rank sustained work.</p>
-  {% if llm and report.llm_meta %}
-  <p>{{ report.llm_meta.judged }} commit{{ '' if report.llm_meta.judged == 1 else 's' }}
-    {% if report.llm_meta.sampled %}(sampled across contributors from {{ t.commits|intcomma }}, cap {{ report.llm_meta.cap }}){% endif %}
-    were reviewed by <strong>{{ report.llm_meta.provider }} / {{ report.llm_meta.model }}</strong>,
-    consuming {{ (report.llm_meta.input_tokens + report.llm_meta.output_tokens)|intcomma }} tokens
-    at an estimated <strong>${{ "%.2f"|format(report.llm_meta.cost_usd) }}</strong>{% if report.llm_meta.errors %}
-    ({{ report.llm_meta.errors }} commit{{ '' if report.llm_meta.errors == 1 else 's' }} failed to judge){% endif %}.
-    Authenticity below 40 is flagged low-effort; AI-likelihood above 60 counts as AI-assisted.</p>
-  <p>Each commit is scored on the <strong>RACE</strong> dimensions (Readability, Maintainability,
-    Correctness, Efficiency; blended 25/30/30/15 into the quality figure). Scores are
-    <strong>grounded in static analysis</strong> of the changed files at each revision —
-    <strong>lizard</strong> for cyclomatic complexity, function length and parameter counts across
-    ~20 languages, and <strong>ruff</strong> for Python bug/security/style rules — so the model
-    judges against objective findings rather than the diff alone
-    (cf. arXiv 2508.14419; rubric design per arXiv 2512.20159).</p>
-  {% endif %}
-</div>
+<!-- ══ METHODOLOGY ═══════════════════════════════════════ -->
+<section class="pane" data-pane="method">
+  <div class="pane-intro"><h2>Methodology &amp; limitations</h2></div>
+  <div class="method">
+    <h3>How the score is built</h3>
+    <p>The composite blends <strong>volume</strong> (commits + churn),
+      <strong>consistency</strong> (active days &amp; cadence), and
+      <strong>quality</strong>{% if llm %}, plus <strong>model-judged quality</strong> (RACE craftsmanship + authenticity){% endif %}.
+      Scores are shrunk for small samples (credibility = commits ÷ (commits + 8)) so a single
+      drive-by commit can't out-rank sustained work.</p>
+    {% if llm and meta %}
+    <p>{{ meta.judged }} commit{{ '' if meta.judged == 1 else 's' }}
+      {% if meta.sampled %}(sampled, {{ meta.strategy }}, cap {{ meta.cap }}){% endif %}
+      reviewed by
+      {% if meta.panel_models %}<strong>a {{ meta.panel_models|length }}-model panel</strong> ({{ meta.panel_models|join(', ') }}){% else %}<strong>{{ meta.provider }} / {{ meta.model }}</strong>{% endif %},
+      consuming {{ (meta.input_tokens + meta.output_tokens)|intcomma }} tokens at est.
+      <strong>${{ "%.2f"|format(meta.cost_usd) }}</strong>{% if meta.errors %} ({{ meta.errors }} failed){% endif %}.
+      Each commit scored on <strong>RACES</strong> (Readability, Maintainability, Correctness,
+      Efficiency, Security) grounded in <strong>lizard</strong> (complexity, ~20 languages) and
+      <strong>ruff</strong> (Python bug/security rules) findings from the changed files
+      {% if meta.panel_agreement %}· inter-judge agreement <strong>{{ meta.panel_agreement }}</strong>/100{% endif %}.</p>
+    {% endif %}
+    <p>Deterministic git signals (both modes, no LLM): <strong>Diff Risk Score</strong>
+      (churn · dispersion · hotspots · alignment), <strong>test-touch</strong> rate,
+      <strong>AI stylometry</strong>, and <strong>message↔diff alignment</strong>.
+      Grounded in the indexed corpus (165 papers): RACE/static-analysis (2508.14419),
+      rubric design (2512.20159), JIT defect prediction (2605.17548, 2605.30208),
+      AI detection (2601.19264), judge reliability (2605.20351).</p>
+
+    <h3 style="margin-top:18px">Limitations — read the scores with these in mind</h3>
+    <ul class="limits">
+      <li><b>Single-model bias.</b> {% if meta.panel_models %}Mitigated here by a multi-model panel (agreement reported above).{% else %}One model judges quality and AI-likelihood; a model can favor its own style. Enable the judge panel in Settings to mitigate.{% endif %}</li>
+      <li><b>Gaming.</b> The judge is instructed to weigh the diff over the commit message, and a deterministic message↔diff alignment check flags mismatches — but a determined author can still influence scores.</li>
+      <li><b>AI detection is a signal, not proof.</b> Stylometry and the LLM guess are heuristics; treat sharp disagreement as low-confidence.</li>
+      <li><b>Sampling.</b> {% if meta.sampled %}Only {{ meta.judged }} of {{ t.commits|intcomma }} commits were judged; unsampled contributors show "not sampled".{% else %}All commits were judged.{% endif %} Confidence badges reflect per-contributor sample size.</li>
+      <li><b>Static analysis coverage.</b> Complexity is multi-language (lizard); deep bug/security linting is Python-only (ruff) today.</li>
+    </ul>
+  </div>
+</section>
 
 <div class="foot">
   <span>YURA · Developer Performance Intelligence</span>
   <span>Run #{{ run.id }} · generated {{ report.generated_at|humandt }}</span>
 </div>
+
+<script>
+(function () {
+  var tabs = document.querySelectorAll(".tab");
+  var panes = document.querySelectorAll(".pane");
+  function show(name) {
+    tabs.forEach(function (t) { t.classList.toggle("is-active", t.dataset.tab === name); });
+    panes.forEach(function (p) { p.classList.toggle("is-active", p.dataset.pane === name); });
+    if (history.replaceState) history.replaceState(null, "", "#" + name);
+  }
+  tabs.forEach(function (t) {
+    t.addEventListener("click", function () { show(t.dataset.tab); window.scrollTo({top: document.getElementById("tabs").offsetTop - 70, behavior: "smooth"}); });
+  });
+  var hash = (location.hash || "").replace("#", "");
+  if (hash && document.querySelector('.pane[data-pane="' + hash + '"]')) show(hash);
+})();
+</script>
 {% endblock %}

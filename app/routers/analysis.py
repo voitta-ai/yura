@@ -260,21 +260,28 @@ async def _run_llm_phase(run_id, emit, report, commits, ctx, repo_path) -> None:
             f"No {provider} API key configured — set one in Settings."
         )
 
+    panel = ctx.get("panel") or []
     sample = llm.sample_commits(commits, cap, strategy)
     total = len(sample)
     skipped = report["totals"]["commits"] - total
     strat_label = "most recent" if strategy == "last" else "across contributors"
+    judge_label = (
+        f"a {len(panel)}-model panel ({', '.join(p['model'] for p in panel)})"
+        if panel
+        else f"{provider}/{model}"
+    )
     emit({
         "type": "status",
         "phase": "judging",
         "provider": provider,
         "model": model,
+        "panel": [p["model"] for p in panel],
         "total": total,
         "cap": cap,
         "strategy": strategy,
         "skipped": max(0, skipped),
         "message": (
-            f"Judging {total} commit(s) with {provider}/{model}"
+            f"Judging {total} commit(s) with {judge_label}"
             + (f" ({strat_label}, sampled from {report['totals']['commits']}, cap {cap})"
                if skipped > 0 else "")
             + "…"
@@ -299,7 +306,7 @@ async def _run_llm_phase(run_id, emit, report, commits, ctx, repo_path) -> None:
         })
 
     totals = await llm.judge_commits(
-        sample, repo_path, provider, api_key, model, on_progress
+        sample, repo_path, provider, api_key, model, on_progress, panel=panel
     )
 
     emit({
@@ -318,6 +325,12 @@ async def _run_llm_phase(run_id, emit, report, commits, ctx, repo_path) -> None:
     if story:
         report["story"] = story
 
+    # Panel agreement rollup (if a panel ran).
+    agreements = [
+        j["panel"]["agreement"]
+        for j in totals.by_hash.values()
+        if j.get("panel")
+    ]
     report["llm_meta"] = {
         "provider": provider,
         "model": model,
@@ -329,6 +342,10 @@ async def _run_llm_phase(run_id, emit, report, commits, ctx, repo_path) -> None:
         "cap": cap,
         "strategy": strategy,
         "sampled": total < report["totals"]["commits"],
+        "panel_models": [p["model"] for p in panel],
+        "panel_agreement": round(sum(agreements) / len(agreements), 1)
+        if agreements
+        else None,
     }
 
 
@@ -373,9 +390,30 @@ def _load_ctx(
             "model": llm_cfg["model"],
             "api_key": llm_cfg["api_key"],
             "cap": int(s.get("max_commits_per_run") or 300),
+            "panel": _build_panel(s),
         }
     finally:
         db.close()
+
+
+def _build_panel(s: dict) -> list[dict]:
+    """Resolve the opt-in judge panel from settings into [{provider,api_key,model}].
+
+    Returns [] unless judge_panel is on and ≥2 valid specs with keys resolve.
+    """
+    if s.get("judge_panel") != "on":
+        return []
+    keys = {"anthropic": s.get("anthropic_api_key", ""), "openai": s.get("openai_api_key", "")}
+    specs = []
+    for raw in (s.get("panel_models") or "").split(","):
+        raw = raw.strip()
+        if ":" not in raw:
+            continue
+        prov, _, mdl = raw.partition(":")
+        prov, mdl = prov.strip(), mdl.strip()
+        if prov in keys and keys[prov] and mdl:
+            specs.append({"provider": prov, "api_key": keys[prov], "model": mdl})
+    return specs if len(specs) >= 2 else []
 
 
 def _save_result(run_id: int, result: dict, message: str) -> None:
@@ -460,6 +498,33 @@ def _build_exhibits(report: dict) -> dict:
         quadrants={"tr": "CHURNERS", "tl": "REFACTORERS", "br": "BUILDERS", "bl": "LIGHT TOUCH"},
         tint=None,  # neither corner is unambiguously "good" here
     )
+
+    # Deterministic git signals (both modes): diff risk + test-touch.
+    risk_devs = [d for d in scatter_devs if d.get("avg_risk") is not None]
+    if risk_devs:
+        exhibits["risk"] = charts.hbar(
+            [
+                {
+                    "label": d["name"],
+                    "value": d.get("avg_risk", 0),
+                    "sub": f'{d.get("high_risk_commits", 0)} high-risk',
+                }
+                for d in risk_devs
+            ],
+            highlight_first=False,
+        )
+        exhibits["tests"] = charts.hbar(
+            [
+                {
+                    "label": d["name"],
+                    "value": round(d.get("test_ratio", 0) * 100),
+                    "sub": f'{d.get("tests_touched", 0)} commits',
+                }
+                for d in scatter_devs
+            ],
+            value_suffix="%",
+            highlight_first=False,
+        )
 
     if report.get("mode") == "llm":
         judged = [d for d in top if d.get("llm", {}).get("judged")]
@@ -583,4 +648,47 @@ def _build_exhibits(report: dict) -> dict:
             }
             for d in judged[:6]
         ]
+        # Security dimension (RACES).
+        exhibits["security"] = charts.hbar(
+            [
+                {
+                    "label": d["name"],
+                    "value": d["llm"].get("avg_security", 0),
+                    "sub": f'{d["llm"].get("security_findings", 0)} findings',
+                }
+                for d in judged
+            ],
+            highlight_first=False,
+        )
+        # AI detection: deterministic stylometry vs the LLM's own guess.
+        stylo = [
+            d for d in judged if d["llm"].get("avg_ai_stylometry") is not None
+        ]
+        if stylo:
+            exhibits["ai_compare"] = charts.grouped_score(
+                [
+                    {
+                        "label": d["name"],
+                        "values": {
+                            "stylometry": d["llm"]["avg_ai_stylometry"],
+                            "llm_guess": d["llm"]["avg_ai_likelihood"],
+                        },
+                    }
+                    for d in stylo[:8]
+                ]
+            )
+        # Headline gauges (gravitas).
+        lt = report.get("llm_totals", {})
+        gauges = [
+            charts.gauge(lt.get("avg_quality", 0), "Avg quality", sub="RACE-weighted"),
+            charts.gauge(lt.get("avg_authenticity", 0), "Authenticity", sub="real vs padding"),
+            charts.gauge(lt.get("avg_security", 0), "Security", sub="RACES axis"),
+        ]
+        meta = report.get("llm_meta", {})
+        if meta.get("panel_agreement") is not None:
+            gauges.append(
+                charts.gauge(meta["panel_agreement"], "Judge agreement",
+                             sub=f'{len(meta.get("panel_models", []))}-model panel')
+            )
+        exhibits["gauges"] = gauges
     return exhibits

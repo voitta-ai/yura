@@ -12,6 +12,10 @@ DEFAULTS: dict[str, str] = {
     "anthropic_model": "claude-opus-4-8",
     "openai_model": "gpt-4o",
     "max_commits_per_run": "300",  # cost guard for phase-2 LLM judging
+    # Multi-judge panel (opt-in): each commit judged by N models for reliability.
+    # Format: comma-separated "provider:model" (e.g. "openai:gpt-4o,anthropic:claude-haiku-4-5").
+    "judge_panel": "off",  # "off" | "on"
+    "panel_models": "",
 }
 
 # Keys treated as secrets (masked in the UI).

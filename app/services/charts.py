@@ -180,6 +180,48 @@ def line(labels: list[str], values: list[int], *, width: int = 640, height: int 
     return _svg(width, height, "".join(parts))
 
 
+def gauge(value: float, label: str, *, sub: str = "", size: int = 200) -> str:
+    """Semicircular 0–100 gauge for a single headline metric (gravitas)."""
+    import math
+
+    v = max(0.0, min(100.0, value))
+    cx, cy, r = size / 2, size * 0.62, size * 0.40
+    sw = size * 0.085
+
+    def pt(frac: float):
+        ang = math.pi * (1 - frac)  # 180°→0°
+        return cx + r * math.cos(ang), cy - r * math.sin(ang)
+
+    x0, y0 = pt(0)
+    x1, y1 = pt(1)
+    vx, vy = pt(v / 100)
+    big = 1 if v > 50 else 0
+    track = (
+        f'<path d="M{x0:.1f},{y0:.1f} A{r:.1f},{r:.1f} 0 0 1 {x1:.1f},{y1:.1f}" '
+        f'fill="none" stroke="{GRID}" stroke-width="{sw:.1f}" stroke-linecap="round"/>'
+    )
+    arc = (
+        f'<path d="M{x0:.1f},{y0:.1f} A{r:.1f},{r:.1f} 0 {big} 1 {vx:.1f},{vy:.1f}" '
+        f'fill="none" stroke="{CYAN}" stroke-width="{sw:.1f}" stroke-linecap="round"/>'
+    )
+    num = (
+        f'<text x="{cx:.0f}" y="{cy - size*0.02:.0f}" text-anchor="middle" '
+        f'font-size="{size*0.26:.0f}" font-weight="700" fill="{NAVY}" '
+        f'font-family="{_FONT}">{value:.0f}</text>'
+    )
+    lab = (
+        f'<text x="{cx:.0f}" y="{cy + size*0.16:.0f}" text-anchor="middle" '
+        f'font-size="{size*0.072:.0f}" letter-spacing="1" fill="{MUTE}" '
+        f'font-family="{_FONT}">{escape(label.upper())}</text>'
+    )
+    subt = (
+        f'<text x="{cx:.0f}" y="{cy + size*0.27:.0f}" text-anchor="middle" '
+        f'font-size="{size*0.062:.0f}" fill="{MUTE}" font-family="{_FONT}">{escape(sub)}</text>'
+        if sub else ""
+    )
+    return _svg(size, int(size * 0.82), track + arc + num + lab + subt)
+
+
 def _median(xs: list[float]) -> float:
     s = sorted(xs)
     n = len(s)
