@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "yura"
-version = "0.1.0"
+version = "0.1.1"
 description = "Git developer-performance intelligence — rank contributors with LLM-judged commit analysis and McKinsey-style reports"
 readme = "README.md"
 requires-python = ">=3.11"
